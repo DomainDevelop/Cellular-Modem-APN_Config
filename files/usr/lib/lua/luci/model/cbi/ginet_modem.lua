@@ -1,6 +1,7 @@
 -- GiNet Cell Modem Configuration CBI (Configurable Binding Interface)
 -- Web interface for displaying and configuring cellular modem settings
 -- Compatible with: GiNet XE-3000 Puli AX, Quectel RM520N-GL
+-- Supports IMEI changes for legally-repurposed devices (GL.iNet firmware)
 
 require("luci.sys")
 require("luci.util")
@@ -173,11 +174,46 @@ o = s_config:option(Flag, "enabled", translate("Enable Cellular Modem"),
 o.default = 1
 o.rmempty = false
 
--- IMEI Display (informational)
-o = s_config:option(Value, "imei", translate("IMEI (Informational)"),
-	translate("International Mobile Equipment Identity - Usually read-only from modem. Changing IMEI may be illegal in your region."))
-o.readonly = true
+-- IMEI Configuration (Editable for GL.iNet firmware)
+-- Legal for devices no longer in active service (e.g., repurposed devices)
+o = s_config:option(Value, "imei", translate("Device IMEI"),
+	translate("International Mobile Equipment Identity (15 digits). GL.iNet firmware supports changes for legally-repurposed devices. Legal use: devices no longer in active service."))
+o.placeholder = "123456789012345"
 o.datatype = "string"
+o.rmempty = true
+
+-- =====================================================
+-- LEGAL NOTICE SECTION
+-- =====================================================
+
+s_legal = m:section(NamedSection, "settings", "modem", translate("⚠️ Legal Notice - IMEI Changes"))
+s_legal.addremove = false
+s_legal.anonymous = true
+
+o = s_legal:option(DummyValue, "_legal_notice", translate("Important Information"))
+o.rawhtml = true
+o.default = [[
+<div style="background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 4px; margin: 10px 0;">
+	<strong>⚠️ IMEI Change - Legal Use Only</strong><br/><br/>
+	IMEI (International Mobile Equipment Identity) changes are <strong>legal</strong> in the following cases:<br/>
+	<ul style="margin: 8px 0; padding-left: 20px;">
+		<li>Device is no longer in active service (e.g., damaged, broken, retired)</li>
+		<li>Device is being repurposed with legally-obtained IMEI sources</li>
+		<li>You own both the device and the IMEI being transferred</li>
+		<li>Local laws permit such changes</li>
+	</ul><br/>
+	
+	<strong>⛔ IMEI changes are ILLEGAL if:</strong><br/>
+	<ul style="margin: 8px 0; padding-left: 20px;">
+		<li>Device is still in active service by another person</li>
+		<li>IMEI is from a stolen or unauthorized device</li>
+		<li>Used to evade carrier contracts or regulations</li>
+		<li>Your country/region prohibits IMEI changes</li>
+	</ul><br/>
+	
+	<em style="color: #666;">GL.iNet firmware enables IMEI changes via AT commands for flexibility in device repurposing.</em>
+</div>
+]]
 
 -- =====================================================
 -- CARRIER PRESETS (Optional)
@@ -231,13 +267,23 @@ o.default = "QMI (Qualcomm MSM Interface) / CDC-WDM"
 -- =====================================================
 
 function m.on_save(self)
-	-- Get the new APN value
+	-- Get the new APN and IMEI values
 	local apn = self.uci:get("ginet_modem", "settings", "apn")
+	local imei = self.uci:get("ginet_modem", "settings", "imei")
 	local enabled = self.uci:get("ginet_modem", "settings", "enabled")
 	
 	if apn and enabled == "1" then
+		-- Build command with APN and optional IMEI
+		local cmd = "/usr/bin/apply-ginet-modem-settings.sh '" .. apn:gsub("'", "'\\''") .. "'"
+		
+		if imei and imei ~= "" then
+			cmd = cmd .. " '" .. imei:gsub("'", "'\\''") .. "'"
+		end
+		
+		cmd = cmd .. " 2>&1"
+		
 		-- Call backend script to apply settings
-		local result = luci.sys.call("/usr/bin/apply-ginet-modem-settings.sh '" .. apn:gsub("'", "'\\''") .. "' 2>&1")
+		local result = luci.sys.call(cmd)
 		
 		if result == 0 then
 			luci.util.exec("/usr/bin/ginet-modem-status.sh > /tmp/ginet_modem_status.json 2>/dev/null &")
