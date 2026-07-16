@@ -1,0 +1,4 @@
+config modem 'settings'
+	option enabled '1'
+	option imei ''
+	option apn 'internet'
