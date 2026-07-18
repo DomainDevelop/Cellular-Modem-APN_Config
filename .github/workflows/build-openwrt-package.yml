@@ -123,6 +123,7 @@ jobs:
 
       - name: Collect package artifacts
         id: collect
+        shell: bash
         run: |
           set -euxo pipefail
           PKG_NAME="${{ steps.pkg.outputs.pkg_name }}"
