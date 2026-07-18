@@ -1,5 +1,6 @@
 local sys = require "luci.sys"
 local fs = require "nixio.fs"
+local util = require "luci.util"
 
 m = Map("ginet_modem", translate("Cell Watch"),
 	translate("Rogue-tower / IMSI-catcher HEURISTICS and coarse tower-based location. " ..
@@ -35,7 +36,7 @@ function status.cfgvalue()
 	local function row(label, val)
 		if val and val ~= "" then
 			rows[#rows + 1] = string.format("<tr><td style='padding-right:1em'><strong>%s</strong></td><td>%s</td></tr>",
-				luci.util.pcdata(label), luci.util.pcdata(val))
+				util.pcdata(label), util.pcdata(val))
 		end
 	end
 	row(translate("Radio Access"), rat)
@@ -57,7 +58,7 @@ function status.cfgvalue()
 	if alerts_blob and alerts_blob:match('%S') then
 		local items = {}
 		for a in alerts_blob:gmatch('"([^"]+)"') do
-			items[#items + 1] = "<li>" .. luci.util.pcdata(a) .. "</li>"
+			items[#items + 1] = "<li>" .. util.pcdata(a) .. "</li>"
 		end
 		if #items > 0 then
 			html = html .. "<div style='margin-top:0.5em;color:#a00'><strong>" ..
