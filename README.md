@@ -33,21 +33,24 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
   - Controlled PTY execution (`script` + timeout)
   - Command safety policy blocks chaining/injection operators
 
-## Actions Artifact (Exact Installable Package Output)
+## Actions Artifact (Router-Installable Package Output)
 
-The workflow builds with the OpenWrt SDK target profile and uploads the generated installable `.ipk` and `SHA256SUMS` as artifacts.
+The workflow builds with the OpenWrt SDK target profile and uploads:
+- installable `.ipk` package(s)
+- `SHA256SUMS`
+- `INSTALL.txt` (manual USB install instructions)
 
 From **Actions** tab:
 1. Open a completed run of **Build OpenWrt Package**.
 2. Download artifact named like:
    - `luci-app-ginet-cellmodem_23.05.5_xe3000_aarch64_cortex-a53`
-3. Extract and install on router:
+3. Extract the artifact, copy the `.ipk` to USB storage, then install on router:
 
 ```sh
-opkg install luci-app-ginet-cellmodem_0.2.0-alpha.1-1_all.ipk
+opkg install /path/to/luci-app-ginet-cellmodem_*.ipk
 ```
 
-This artifact is produced by the same OpenWrt package build flow used to generate router-installable package files.
+The workflow now also validates the generated `.ipk` format (`debian-binary`, `control.tar.*`, `data.tar.*`) before upload, so the downloaded artifact matches router package requirements.
 
 ## Local Build (OpenWrt SDK)
 
@@ -70,4 +73,3 @@ make package/luci-app-ginet-cellmodem/compile V=s
 
 - Base LuCI/app runtime: `luci-base`, `libuci-lua`, `libubox`, `uqmi`, `kmod-usb-net-qmi-wwan`
 - VPN/WireGuard: `wireguard-tools`, `kmod-wireguard`, `kmod-crypto-lib-chacha20poly1305`, `kmod-crypto-lib-curve25519`
-

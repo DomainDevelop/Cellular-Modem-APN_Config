@@ -73,6 +73,23 @@ jobs:
             cd artifacts
             sha256sum *.ipk > SHA256SUMS
           )
+          {
+            echo "Router manual install:"
+            echo "1) Copy the .ipk from this artifact to USB storage."
+            echo "2) Mount USB on the router and install:"
+            echo "   opkg install /path/to/luci-app-ginet-cellmodem_*.ipk"
+          } > artifacts/INSTALL.txt
+
+      - name: Validate generated package format
+        run: |
+          set -euo pipefail
+          IPK_FILE="$(find artifacts -maxdepth 1 -type f -name 'luci-app-ginet-cellmodem_*.ipk' -print -quit)"
+          test -n "$IPK_FILE" || { echo "No .ipk file matching luci-app-ginet-cellmodem_*.ipk found in artifacts/"; exit 1; }
+          command -v ar >/dev/null 2>&1 || { echo "'ar' tool is required to validate .ipk archive format"; exit 1; }
+          AR_ENTRIES="$(ar t "$IPK_FILE")" || { echo "Failed to inspect .ipk archive: $IPK_FILE"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "Missing debian-binary in package"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -E -q "^control.tar" || { echo "Missing control.tar.* in package"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -E -q "^data.tar" || { echo "Missing data.tar.* in package"; exit 1; }
 
       - name: Upload compiled package
         uses: actions/upload-artifact@v4
