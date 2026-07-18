@@ -34,3 +34,64 @@ config wireguard_tunnel
 	option endpoint_port '51820'
 	option allowed_ips '0.0.0.0/0,::/0'
 	option persistent_keepalive '25'
+	option mtu ''
+	option obfuscation '0'
+	option obfs_type 'udp2raw'
+	option obfs_params ''
+
+# Stealth / privacy controls. These reduce common passive fingerprinting
+# vectors. They do NOT guarantee that a carrier or observer cannot identify
+# tethering, the device, or its location.
+config stealth 'settings'
+	# TTL/hop-limit normalization: rewrite outbound TTL to a fixed value so all
+	# traffic appears to originate from a single device (common tethering check).
+	option ttl_normalize '0'
+	option ttl_value '65'
+	# Pin a WAN MTU to blend traffic profiles (0 = leave unchanged).
+	option wan_mtu '0'
+	# Tethering-hiding bundle convenience flag (enables TTL + MTU guidance).
+	option hide_tethering '0'
+
+# Per-interface MAC randomization policy.
+#   mode: off | on-boot | on-reconnect | scheduled
+#   interval_minutes: used only when mode = scheduled
+config macrand 'ap'
+	option ifname 'wlan0'
+	option mode 'off'
+	option interval_minutes '60'
+
+config macrand 'sta'
+	option ifname ''
+	option mode 'off'
+	option interval_minutes '15'
+
+# Cell watch: rogue-tower heuristics + coarse tower-based location.
+config cellwatch 'settings'
+	option enabled '0'
+	# Poll interval in minutes for the monitor cron job.
+	option interval_minutes '5'
+	# Raise an alert when the network is forced down to 2G/3G.
+	option alert_downgrade '1'
+	# Raise an alert on unexpected serving Cell ID / LAC changes.
+	option alert_cellid_change '1'
+	# Coarse location lookup from cell identifiers. Uses a LOCAL offline
+	# database only (never queries the network) to avoid leaking cell IDs.
+	option location_enabled '0'
+	option location_db '/etc/ginet/cell_db.csv'
+
+# Adaptive/regulated VPN watchdog. Only bounces the VPN when the underlying
+# link degrades past a sustained threshold, with hysteresis and cooldown so it
+# does not flap.
+config vpn_watchdog 'settings'
+	option enabled '0'
+	option interval_minutes '2'
+	# Host to probe for reachability/latency (through the tunnel).
+	option probe_host '1.1.1.1'
+	# Latency ceiling in milliseconds before a sample counts as "bad".
+	option max_latency_ms '800'
+	# Consecutive bad samples required before acting (hysteresis).
+	option fail_threshold '3'
+	# Minimum seconds between corrective actions (cooldown).
+	option cooldown_seconds '300'
+	# Try the next configured tunnel for the SIM on repeated failure (failover).
+	option failover '0'

@@ -136,6 +136,65 @@ ka = st:option(Value, "persistent_keepalive", translate("Persistent Keepalive"))
 ka.datatype = "uinteger"
 ka.default = "25"
 
+mtu = st:option(Value, "mtu", translate("MTU"))
+mtu.datatype = "range(1280,1500)"
+mtu.placeholder = "1420"
+mtu.description = translate("Pin the tunnel MTU to normalize packet sizes and avoid fragmentation fingerprints. Leave blank for the default.")
+
+obfs = st:option(Flag, "obfuscation", translate("Obfuscation"))
+obfs.default = 0
+obfs.description = translate("Wrap the tunnel transport to resist DPI. Requires an obfuscator " ..
+	"package (e.g. udp2raw) installed AND the same obfuscation configured on the VPN server.")
+
+obfs_type = st:option(ListValue, "obfs_type", translate("Obfuscation Type"))
+obfs_type:value("udp2raw", "udp2raw")
+obfs_type.default = "udp2raw"
+obfs_type:depends("obfuscation", "1")
+
+obfs_params = st:option(Value, "obfs_params", translate("Obfuscation Parameters"))
+obfs_params.datatype = "maxlength(200)"
+obfs_params.placeholder = "-k mypassword --raw-mode faketcp"
+obfs_params:depends("obfuscation", "1")
+
+-- Adaptive VPN watchdog -----------------------------------------------------
+wd = m:section(NamedSection, "settings", "vpn_watchdog", translate("Adaptive VPN Watchdog"),
+	translate("Only reconnects the VPN when the underlying link degrades past a sustained " ..
+		"threshold, with hysteresis and cooldown so it does not flap."))
+wd.addremove = false
+
+wd_en = wd:option(Flag, "enabled", translate("Enable watchdog"))
+wd_en.default = 0
+
+wd_int = wd:option(Value, "interval_minutes", translate("Check interval (minutes)"))
+wd_int.datatype = "range(1,60)"
+wd_int.default = "2"
+wd_int:depends("enabled", "1")
+
+wd_host = wd:option(Value, "probe_host", translate("Probe host"))
+wd_host.datatype = "host"
+wd_host.default = "1.1.1.1"
+wd_host:depends("enabled", "1")
+
+wd_lat = wd:option(Value, "max_latency_ms", translate("Max latency (ms)"))
+wd_lat.datatype = "range(1,10000)"
+wd_lat.default = "800"
+wd_lat:depends("enabled", "1")
+
+wd_thr = wd:option(Value, "fail_threshold", translate("Fail threshold (consecutive bad samples)"))
+wd_thr.datatype = "range(1,20)"
+wd_thr.default = "3"
+wd_thr:depends("enabled", "1")
+
+wd_cd = wd:option(Value, "cooldown_seconds", translate("Cooldown (seconds)"))
+wd_cd.datatype = "range(30,3600)"
+wd_cd.default = "300"
+wd_cd:depends("enabled", "1")
+
+wd_fo = wd:option(Flag, "failover", translate("Fail over to next tunnel"))
+wd_fo.default = 0
+wd_fo:depends("enabled", "1")
+wd_fo.description = translate("On repeated failure, switch to the next configured tunnel for the active SIM.")
+
 function m.on_after_commit(self)
 	uci:foreach("ginet_modem", "vpn", function(v)
 		local sim_slot = v.sim_slot or ((v[".name"] == "sim2") and "2" or "1")
@@ -156,6 +215,9 @@ function m.on_after_commit(self)
 	if rc ~= 0 then
 		sys.syslog("warning", "ginet-vpn reload failed with exit code " .. tostring(rc))
 	end
+	-- Apply obfuscation wrappers and refresh watchdog cron scheduling.
+	sys.call("/usr/bin/ginet-wg-obfs.sh apply >/dev/null 2>&1")
+	sys.call("/etc/init.d/ginet-stealth reload >/dev/null 2>&1")
 end
 
 return m

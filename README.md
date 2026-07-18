@@ -27,11 +27,53 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
     - Block connections without VPN (kill-switch)
   - WireGuard tunnel configuration list
   - One active tunnel enforced per SIM
+  - Per-tunnel MTU normalization and optional obfuscation (see below)
+  - **Adaptive VPN watchdog** — only reconnects/fails over the VPN when the
+    underlying link degrades past a sustained threshold, using hysteresis
+    (consecutive bad samples) and a cooldown so it does not flap
+
+- **Stealth / Privacy page**
+  - **TTL / hop-limit normalization** — rewrites outbound TTL to a fixed value
+    so traffic appears to originate from a single device
+  - **WAN MTU pinning** — blends traffic profiles / avoids fragmentation fingerprints
+  - **MAC randomization scheduler** — per-interface (AP + client/STA) with modes
+    `off`, `on-boot`, `on-reconnect`, and `scheduled (interval)`
+
+- **Cell Watch page**
+  - Rogue-tower / IMSI-catcher **heuristics**: forced 2G/3G downgrade and
+    unexpected serving Cell ID / LAC changes
+  - Coarse tower-based location from a **local offline** cell database (opt-in)
 
 - **Built-in Terminal page**
   - Admin-only LuCI page
   - Controlled PTY execution (`script` + timeout)
   - Command safety policy blocks chaining/injection operators
+
+## Stealth / Privacy — What It Does and Does Not Do
+
+These controls reduce **common, passive** fingerprinting vectors. They do **not**
+make you invisible, and none of them can guarantee that a carrier or observer
+cannot identify tethering, the device, or its location.
+
+- **TTL normalization** defeats the most common *passive* tethering check, but
+  carriers can also use DPI, radio-access-type usage patterns, and traffic
+  volume heuristics. This "reduces common detection," it does not make tethering
+  undetectable.
+- **MAC randomization** of the AP BSSID disconnects connected clients at each
+  rotation, so `on-boot` is the recommended AP mode. Client/STA interfaces can
+  rotate more aggressively.
+- **Cell Watch is heuristic, not proof.** True IMSI-catcher detection needs raw
+  baseband / full neighbor-cell data that most modems do not expose over QMI.
+  What it reliably flags is the classic forced 2G/3G downgrade and unexpected
+  Cell ID / LAC changes. Treat alerts as hints.
+- **Location** is coarse (hundreds of metres to kilometres) and resolved from a
+  **local offline CSV database only** (`mcc,mnc,lac,cid,lat,lon`) so cell
+  identifiers are never sent to the network. It shows roughly what the network
+  side can infer about your position — it is not GPS.
+- **WireGuard obfuscation** is opt-in and only works if the same obfuscator
+  (e.g. `udp2raw`) is installed here **and** configured identically on the VPN
+  server. The UI is gated on the obfuscator binary being present at runtime.
+
 
 ## Actions Artifact (Router-Installable Package Output)
 

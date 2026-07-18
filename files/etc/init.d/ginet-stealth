@@ -1,0 +1,88 @@
+#!/bin/sh /etc/rc.common
+# Applies stealth/privacy settings at boot and manages cron scheduling for the
+# MAC randomization scheduler, cell watch monitor, and adaptive VPN watchdog.
+
+START=19
+STOP=88
+USE_PROCD=1
+
+CRON_FILE="/etc/crontabs/root"
+CRON_TAG="# ginet-stealth"
+
+uci_get() {
+	uci -q get "ginet_modem.$1" 2>/dev/null || echo "${2:-}"
+}
+
+# Clamp an interval to a cron-friendly minute value (1..59).
+cron_minute_interval() {
+	v="$1"; d="$2"
+	case "$v" in
+		''|*[!0-9]*) v="$d" ;;
+	esac
+	[ "$v" -ge 1 ] 2>/dev/null || v="$d"
+	[ "$v" -le 59 ] 2>/dev/null || v=59
+	echo "$v"
+}
+
+rebuild_cron() {
+	mkdir -p /etc/crontabs
+	touch "$CRON_FILE"
+	# Drop any previously managed lines.
+	sed -i "\|$CRON_TAG|d" "$CRON_FILE" 2>/dev/null || true
+
+	# Scheduled MAC randomization.
+	for section in ap sta; do
+		mode=$(uci_get "$section.mode" off)
+		if [ "$mode" = "scheduled" ]; then
+			iv=$(cron_minute_interval "$(uci_get "$section.interval_minutes" 60)" 60)
+			echo "*/$iv * * * * /usr/bin/ginet-mac-randomize.sh scheduled $CRON_TAG" >> "$CRON_FILE"
+		fi
+	done
+
+	# Cell watch: iterate over cellwatch-typed sections.
+	for cwsec in $(uci -q show ginet_modem 2>/dev/null | sed -n "s/^ginet_modem\.\([^.]*\)=cellwatch$/\1/p"); do
+		if [ "$(uci -q get "ginet_modem.$cwsec.enabled" 2>/dev/null || echo 0)" = "1" ]; then
+			iv=$(cron_minute_interval "$(uci -q get "ginet_modem.$cwsec.interval_minutes" 2>/dev/null || echo 5)" 5)
+			echo "*/$iv * * * * /usr/bin/ginet-cell-monitor.sh run $CRON_TAG" >> "$CRON_FILE"
+		fi
+	done
+
+	# Adaptive VPN watchdog: iterate over vpn_watchdog-typed sections.
+	for wdsec in $(uci -q show ginet_modem 2>/dev/null | sed -n "s/^ginet_modem\.\([^.]*\)=vpn_watchdog$/\1/p"); do
+		if [ "$(uci -q get "ginet_modem.$wdsec.enabled" 2>/dev/null || echo 0)" = "1" ]; then
+			iv=$(cron_minute_interval "$(uci -q get "ginet_modem.$wdsec.interval_minutes" 2>/dev/null || echo 2)" 2)
+			echo "*/$iv * * * * /usr/bin/ginet-vpn-watchdog.sh run $CRON_TAG" >> "$CRON_FILE"
+		fi
+	done
+
+	/etc/init.d/cron enabled || /etc/init.d/cron enable >/dev/null 2>&1 || true
+	/etc/init.d/cron restart >/dev/null 2>&1 || true
+}
+
+apply_all() {
+	/usr/bin/ginet-stealth.sh apply >/dev/null 2>&1 || true
+	/usr/bin/ginet-mac-randomize.sh boot >/dev/null 2>&1 || true
+	/usr/bin/ginet-wg-obfs.sh apply >/dev/null 2>&1 || true
+	rebuild_cron
+}
+
+start_service() {
+	apply_all
+}
+
+stop_service() {
+	# Remove managed cron lines and stop obfuscators.
+	if [ -f "$CRON_FILE" ]; then
+		sed -i "\|$CRON_TAG|d" "$CRON_FILE" 2>/dev/null || true
+		/etc/init.d/cron restart >/dev/null 2>&1 || true
+	fi
+	/usr/bin/ginet-wg-obfs.sh stop >/dev/null 2>&1 || true
+}
+
+reload_service() {
+	apply_all
+}
+
+service_triggers() {
+	procd_add_reload_trigger "ginet_modem"
+}
