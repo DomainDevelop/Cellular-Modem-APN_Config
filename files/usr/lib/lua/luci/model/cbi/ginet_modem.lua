@@ -92,6 +92,12 @@ o = s_config:option(Value, "apn", translate("Access Point Name (APN)"))
 o.placeholder = "internet"
 o.datatype = "and(maxlength(64),string)"
 o.rmempty = false
+function o.validate(self, value)
+	if value and value:match("^[%w%._%-]+$") then
+		return value
+	end
+	return nil, translate("APN can only contain letters, numbers, dots, underscores, and dashes")
+end
 
 local enabled = s_config:option(Flag, "enabled", translate("Enable Cellular Modem"))
 enabled.default = 1

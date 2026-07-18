@@ -2,6 +2,20 @@ local util = require "luci.util"
 
 local output_cache = ""
 
+local allowed_bins = {
+	ubus = true,
+	uci = true,
+	ip = true,
+	ifstatus = true,
+	logread = true,
+	wg = true,
+	ping = true,
+	nslookup = true,
+	opkg = true,
+	cat = true,
+	dmesg = true
+}
+
 local function command_allowed(cmd)
 	if not cmd or #cmd == 0 or #cmd > 256 then
 		return false
@@ -9,9 +23,14 @@ local function command_allowed(cmd)
 	if cmd:match("[;&|`$><\\]") then
 		return false
 	end
-	if not cmd:match("^[%w%s%._%-%+/%:=,@%%]+$") then
+	if not cmd:match("^[%w%s%._%-%+/%:=,@]+$") then
 		return false
 	end
+	local bin = cmd:match("^(%S+)")
+	if not bin or not allowed_bins[bin] then
+		return false
+	end
+
 	return true
 end
 

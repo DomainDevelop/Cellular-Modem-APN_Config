@@ -19,7 +19,7 @@ jobs:
             target: "mediatek"
             subtarget: "filogic"
             pkg_arch: "aarch64_cortex-a53"
-            sdk_url: "https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+            sdk_toolchain: "gcc-12.3.0_musl"
 
     steps:
       - name: Checkout package source
@@ -44,7 +44,8 @@ jobs:
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           rm -rf openwrt-sdk sdk.tar.*
-          wget -O sdk.tar.xz "${{ matrix.sdk_url }}"
+          SDK_URL="https://downloads.openwrt.org/releases/${{ matrix.openwrt_version }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_${{ matrix.sdk_toolchain }}.Linux-x86_64.tar.xz"
+          wget -O sdk.tar.xz "$SDK_URL"
           mkdir -p openwrt-sdk
           tar -xf sdk.tar.xz -C openwrt-sdk --strip-components=1
 

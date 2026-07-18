@@ -138,7 +138,7 @@ ka.default = "25"
 
 function m.on_after_commit(self)
 	uci:foreach("ginet_modem", "vpn", function(v)
-		local sim_slot = v.sim_slot or "1"
+		local sim_slot = v.sim_slot or ((v[".name"] == "sim2") and "2" or "1")
 		local active_tunnel = v.active_tunnel or ""
 		if active_tunnel ~= "" then
 			uci:foreach("ginet_modem", "wireguard_tunnel", function(t)

@@ -10,10 +10,11 @@ start_service() {
 	procd_set_param respawn 3600 5 -1
 	procd_close_instance
 
-	if ! grep -q 'ginet-wg-update-check.sh' /etc/crontabs/root 2>/dev/null; then
-		echo '0 3 * * * /usr/bin/ginet-wg-update-check.sh' >> /etc/crontabs/root
-		/etc/init.d/cron restart >/dev/null 2>&1 || true
+	if [ -f /etc/crontabs/root ]; then
+		sed -i '/ginet-wg-update-check\.sh/d' /etc/crontabs/root
 	fi
+	echo '0 3 * * * /usr/bin/ginet-wg-update-check.sh' >> /etc/crontabs/root
+	/etc/init.d/cron restart >/dev/null 2>&1 || true
 }
 
 stop_service() {
