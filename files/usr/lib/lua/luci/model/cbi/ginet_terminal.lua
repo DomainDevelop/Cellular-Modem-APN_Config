@@ -2,48 +2,30 @@ local util = require "luci.util"
 
 local output_cache = ""
 
-local allowed_bins = {
-	ubus = true,
-	uci = true,
-	ip = true,
-	ifstatus = true,
-	logread = true,
-	wg = true,
-	ping = true,
-	nslookup = true,
-	opkg = true,
-	cat = true,
-	dmesg = true
+local command_catalog = {
+	board = "ubus call system board",
+	sysinfo = "ubus call system info",
+	ipaddr = "ip address",
+	wwan = "ifstatus wwan",
+	wgshow = "wg show",
+	logread = "logread"
 }
 
-local function command_allowed(cmd)
-	if not cmd or #cmd == 0 or #cmd > 256 then
-		return false
-	end
-	if cmd:match("[;&|`$><\\]") then
-		return false
-	end
-	if not cmd:match("^[%w%s%._%-%+/%:=,@]+$") then
-		return false
-	end
-	local bin = cmd:match("^(%S+)")
-	if not bin or not allowed_bins[bin] then
-		return false
-	end
-
-	return true
-end
-
 m = SimpleForm("ginet_terminal", translate("Built-in Terminal"),
-	translate("Admin-only controlled PTY terminal. Commands are validated and restricted for safety."))
+	translate("Admin-only controlled PTY terminal with restricted diagnostic command set."))
 m.reset = false
 m.submit = false
 
 s = m:section(SimpleSection)
 
-cmd = s:option(Value, "command", translate("Command"))
-cmd.datatype = "and(maxlength(256),string)"
-cmd.placeholder = "ubus call system board"
+cmd = s:option(ListValue, "command", translate("Command"))
+cmd:value("board", "ubus call system board")
+cmd:value("sysinfo", "ubus call system info")
+cmd:value("ipaddr", "ip address")
+cmd:value("wwan", "ifstatus wwan")
+cmd:value("wgshow", "wg show")
+cmd:value("logread", "logread")
+cmd.default = "board"
 
 run = s:option(Button, "run", translate("Run Command"))
 run.inputstyle = "apply"
@@ -56,16 +38,19 @@ out.cfgvalue = function()
 end
 
 function run.write(self, section)
-	local command = (self.map:formvalue("cbid.ginet_terminal.command") or ""):gsub("^%s+", ""):gsub("%s+$", "")
-	if not command_allowed(command) then
-		output_cache = "Blocked by safety policy. Use plain command syntax without shell chaining/operators."
+	local command_id = self.map:formvalue("cbid.ginet_terminal.command") or ""
+	local command = command_catalog[command_id]
+	if not command then
+		output_cache = "Blocked by safety policy."
 		return
 	end
 
 	local wrapped = string.format("timeout 10 script -qfc %q /dev/null 2>&1", command)
-	output_cache = (util.exec(wrapped) or ""):sub(1, 12000)
-	if output_cache == "" then
-		output_cache = "(no output)"
+	local raw = util.exec(wrapped) or ""
+	if #raw > 12000 then
+		output_cache = raw:sub(1, 12000) .. "\n\n[output truncated to 12000 bytes]"
+	else
+		output_cache = raw ~= "" and raw or "(no output)"
 	end
 end
 

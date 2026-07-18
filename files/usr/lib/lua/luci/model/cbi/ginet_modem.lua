@@ -6,14 +6,14 @@ local util = require "luci.util"
 
 local json_available, json = pcall(require, "cjson")
 
+local APN_PATTERN = "^[%w%._%-]+$"
+
 local function safe_text(v, fallback)
 	v = tostring(v or fallback or "")
-	v = v:gsub("[<>&\"]", {
-		["<"] = "&lt;",
-		[">"] = "&gt;",
-		["&"] = "&amp;",
-		['"'] = "&quot;"
-	})
+	v = v:gsub("&", "&amp;")
+	v = v:gsub("<", "&lt;")
+	v = v:gsub(">", "&gt;")
+	v = v:gsub('"', "&quot;")
 	return v
 end
 
@@ -93,7 +93,7 @@ o.placeholder = "internet"
 o.datatype = "and(maxlength(64),string)"
 o.rmempty = false
 function o.validate(self, value)
-	if value and value:match("^[%w%._%-]+$") then
+	if value and value:match(APN_PATTERN) then
 		return value
 	end
 	return nil, translate("APN can only contain letters, numbers, dots, underscores, and dashes")
@@ -107,7 +107,7 @@ function m.on_save(self)
 	local apn = self.uci:get("ginet_modem", "settings", "apn")
 	local enabled = self.uci:get("ginet_modem", "settings", "enabled")
 
-	if enabled == "1" and apn and #apn <= 64 and apn:match("^[%w%._%-]+$") then
+	if enabled == "1" and apn and #apn <= 64 and apn:match(APN_PATTERN) then
 		luci.sys.call(string.format("/usr/bin/apply-ginet-modem-settings.sh %q >/dev/null 2>&1", apn))
 		util.exec("/usr/bin/ginet-modem-status.sh > /tmp/ginet_modem_status.json 2>/dev/null &")
 	end

@@ -45,9 +45,10 @@ jobs:
         run: |
           rm -rf openwrt-sdk sdk.tar.*
           SDK_URL="https://downloads.openwrt.org/releases/${{ matrix.openwrt_version }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_${{ matrix.sdk_toolchain }}.Linux-x86_64.tar.xz"
-          wget -O sdk.tar.xz "$SDK_URL"
+          wget -O sdk.tar.xz "$SDK_URL" || { echo "Failed to download SDK: $SDK_URL"; exit 1; }
+          test -s sdk.tar.xz || { echo "SDK archive is empty"; exit 1; }
           mkdir -p openwrt-sdk
-          tar -xf sdk.tar.xz -C openwrt-sdk --strip-components=1
+          tar -xf sdk.tar.xz -C openwrt-sdk --strip-components=1 || { echo "SDK extraction failed"; exit 1; }
 
       - name: Configure feeds and package source
         run: |

@@ -1,9 +1,11 @@
 module("luci.controller.ginet_modem", package.seeall)
 
 local fs = require "nixio.fs"
+local sys = require "luci.sys"
 
 function index()
 	if not fs.access("/etc/config/ginet_modem") then
+		sys.syslog("warning", "ginet_modem config not found; LuCI pages not registered")
 		return
 	end
 
