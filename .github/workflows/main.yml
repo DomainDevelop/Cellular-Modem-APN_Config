@@ -85,7 +85,10 @@ jobs:
         run: |
           mkdir -p "$ARTIFACT_DIR"
           find "$SDK_DIR/bin/packages" -type f -name 'luci-app-ginet-cellmodem*.ipk' -exec cp {} "$ARTIFACT_DIR/" \;
-          test -n "$(find "$ARTIFACT_DIR" -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+          test -n "$(find "$ARTIFACT_DIR" -maxdepth 1 -type f -name '*.ipk' -print -quit)" || {
+            echo "Error: No luci-app-ginet-cellmodem IPK files were produced"
+            exit 1
+          }
           cat > "$ARTIFACT_DIR/build-info.txt" <<INFO
           package=luci-app-ginet-cellmodem
           openwrt_version=${{ matrix.openwrt_version }}
