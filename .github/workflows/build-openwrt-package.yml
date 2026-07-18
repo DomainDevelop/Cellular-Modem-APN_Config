@@ -60,7 +60,7 @@ jobs:
           rm -rf openwrt-sdk sdk.tar.xz
           SDK_URL="https://downloads.openwrt.org/releases/${{ matrix.openwrt_version }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}/openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_${{ matrix.sdk_toolchain }}.Linux-x86_64.tar.xz"
           echo "Downloading SDK: $SDK_URL"
-          wget --tries=3 --timeout=60 -O sdk.tar.xz "$SDK_URL"
+          wget --tries=3 --timeout=300 -O sdk.tar.xz "$SDK_URL"
           test -s sdk.tar.xz
           mkdir -p openwrt-sdk
           tar -xf sdk.tar.xz -C openwrt-sdk --strip-components=1
@@ -110,7 +110,7 @@ jobs:
           set -euxo pipefail
           make defconfig
           # Build only the target package; -j1 + V=s gives clear, fail-fast logs.
-          make "package/${{ steps.pkg.outputs.pkg_name }}/compile" -j"$(nproc)" V=s
+          make "package/${{ steps.pkg.outputs.pkg_name }}/compile" -j1 V=s
 
       - name: Collect .ipk artifacts
         id: collect
