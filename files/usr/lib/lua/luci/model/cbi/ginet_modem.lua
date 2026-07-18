@@ -108,8 +108,12 @@ function m.on_save(self)
 	local enabled = self.uci:get("ginet_modem", "settings", "enabled")
 
 	if enabled == "1" and apn and #apn <= 64 and apn:match(APN_PATTERN) then
-		luci.sys.call(string.format("/usr/bin/apply-ginet-modem-settings.sh %q >/dev/null 2>&1", apn))
-		util.exec("/usr/bin/ginet-modem-status.sh > /tmp/ginet_modem_status.json 2>/dev/null &")
+		local rc = luci.sys.call(string.format("/usr/bin/apply-ginet-modem-settings.sh %q >/dev/null 2>&1", apn))
+		if rc ~= 0 then
+			luci.sys.syslog("warning", "apply-ginet-modem-settings.sh failed with exit code " .. tostring(rc))
+		else
+			util.exec("/usr/bin/ginet-modem-status.sh > /tmp/ginet_modem_status.json 2>/dev/null &")
+		end
 	end
 end
 

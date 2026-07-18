@@ -19,9 +19,15 @@ start_service() {
 	procd_set_param stderr 1
 	procd_close_instance
 
-	"$MODEM_SCRIPT" > "$STATUS_FILE" 2>/dev/null || true
+	if ! "$MODEM_SCRIPT" > "$STATUS_FILE" 2>/tmp/ginet-modem-init.err; then
+		logger -t ginet-modem "Initial status update failed: $(cat /tmp/ginet-modem-init.err)"
+	fi
+	rm -f /tmp/ginet-modem-init.err
 }
 
 reload_service() {
-	"$MODEM_SCRIPT" > "$STATUS_FILE" 2>/dev/null || true
+	if ! "$MODEM_SCRIPT" > "$STATUS_FILE" 2>/tmp/ginet-modem-init.err; then
+		logger -t ginet-modem "Initial status update failed: $(cat /tmp/ginet-modem-init.err)"
+	fi
+	rm -f /tmp/ginet-modem-init.err
 }

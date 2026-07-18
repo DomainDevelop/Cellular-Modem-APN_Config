@@ -5,7 +5,7 @@ LuCI package for OpenWrt/XE-3000 that combines:
 - Per-SIM WireGuard policy controls
 - Admin-only built-in terminal (controlled PTY execution)
 
-> Version: `v0.2.0-alpha.1`
+> Version channel: `0.2.0` (alpha track)
 
 ## Security Positioning
 
@@ -65,3 +65,9 @@ make package/luci-app-ginet-cellmodem/compile V=s
 - Kill-switch behavior is fail-closed for WAN egress when configured and applied.
 - WireGuard auto-update staging uses `opkg` availability on target firmware.
 - Terminal is intentionally restricted and not a full unrestricted shell.
+
+## Package Dependencies
+
+- Base LuCI/app runtime: `luci-base`, `libuci-lua`, `libubox`, `uqmi`, `kmod-usb-net-qmi-wwan`
+- VPN/WireGuard: `wireguard-tools`, `kmod-wireguard`, `kmod-crypto-lib-chacha20poly1305`, `kmod-crypto-lib-curve25519`
+

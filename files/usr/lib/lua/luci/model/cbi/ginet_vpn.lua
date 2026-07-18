@@ -152,7 +152,10 @@ function m.on_after_commit(self)
 		end
 	end)
 	uci:commit("ginet_modem")
-	sys.call("/etc/init.d/ginet-vpn reload >/dev/null 2>&1")
+	local rc = sys.call("/etc/init.d/ginet-vpn reload >/dev/null 2>&1")
+	if rc ~= 0 then
+		sys.syslog("warning", "ginet-vpn reload failed with exit code " .. tostring(rc))
+	end
 end
 
 return m

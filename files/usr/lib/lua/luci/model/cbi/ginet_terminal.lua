@@ -11,6 +11,10 @@ local command_catalog = {
 	logread = "logread"
 }
 
+local function catalog_command_safe(cmd)
+	return cmd and cmd:match("^[%w%s%._%-]+$") ~= nil
+end
+
 m = SimpleForm("ginet_terminal", translate("Built-in Terminal"),
 	translate("Admin-only controlled PTY terminal with restricted diagnostic command set."))
 m.reset = false
@@ -40,7 +44,7 @@ end
 function run.write(self, section)
 	local command_id = self.map:formvalue("cbid.ginet_terminal.command") or ""
 	local command = command_catalog[command_id]
-	if not command then
+	if not command or not catalog_command_safe(command) then
 		output_cache = "Blocked by safety policy."
 		return
 	end
