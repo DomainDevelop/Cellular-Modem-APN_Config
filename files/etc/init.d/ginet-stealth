@@ -61,6 +61,7 @@ rebuild_cron() {
 
 apply_all() {
 	/usr/bin/ginet-stealth.sh apply >/dev/null 2>&1 || true
+	/usr/bin/ginet-perf.sh apply >/dev/null 2>&1 || true
 	/usr/bin/ginet-mac-randomize.sh boot >/dev/null 2>&1 || true
 	/usr/bin/ginet-wg-obfs.sh apply >/dev/null 2>&1 || true
 	rebuild_cron

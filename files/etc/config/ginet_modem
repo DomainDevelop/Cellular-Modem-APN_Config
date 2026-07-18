@@ -34,7 +34,7 @@ config wireguard_tunnel
 	option endpoint_port '51820'
 	option allowed_ips '0.0.0.0/0,::/0'
 	option persistent_keepalive '25'
-	option mtu ''
+	option mtu '1420'
 	option obfuscation '0'
 	option obfs_type 'udp2raw'
 	option obfs_params ''
@@ -79,7 +79,26 @@ config cellwatch 'settings'
 	option location_enabled '0'
 	option location_db '/etc/ginet/cell_db.csv'
 
-# Adaptive/regulated VPN watchdog. Only bounces the VPN when the underlying
+# Performance controls. These speed up the internet path WITHOUT weakening any
+# of the security/hardening controls above. All options default to off/safe so
+# existing behavior is unchanged until a user opts in.
+#   mss_clamp:            clamp TCP MSS to the path MTU (fixes cellular+WireGuard
+#                         fragmentation/black-holing that tanks throughput).
+#   sqm_enabled/sqm_qdisc: apply a bufferbloat-fighting queueing discipline
+#                         (fq_codel by default) on the WAN device.
+#   flow_offloading:      software flow offload for higher NAT throughput. It is
+#                         FAIL-CLOSED: it self-disables whenever a kill-switch is
+#                         configured or TTL normalization is on, because those
+#                         rely on seeing every packet.
+#   flow_offloading_hw:   additionally request hardware offload (only honored
+#                         when software offload is active and safe).
+config perf 'settings'
+	option mss_clamp '0'
+	option sqm_enabled '0'
+	option sqm_qdisc 'fq_codel'
+	option flow_offloading '0'
+	option flow_offloading_hw '0'
+
 # link degrades past a sustained threshold, with hysteresis and cooldown so it
 # does not flap.
 config vpn_watchdog 'settings'

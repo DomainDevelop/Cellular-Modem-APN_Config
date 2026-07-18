@@ -42,6 +42,7 @@ define Package/luci-app-ginet-cellmodem/install
 	$(INSTALL_BIN) ./files/usr/bin/ginet-cell-monitor.sh $(1)/usr/bin/ginet-cell-monitor.sh
 	$(INSTALL_BIN) ./files/usr/bin/ginet-vpn-watchdog.sh $(1)/usr/bin/ginet-vpn-watchdog.sh
 	$(INSTALL_BIN) ./files/usr/bin/ginet-wg-obfs.sh $(1)/usr/bin/ginet-wg-obfs.sh
+	$(INSTALL_BIN) ./files/usr/bin/ginet-perf.sh $(1)/usr/bin/ginet-perf.sh
 
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/ginet_modem.lua $(1)/usr/lib/lua/luci/model/cbi/ginet_modem.lua
@@ -49,6 +50,7 @@ define Package/luci-app-ginet-cellmodem/install
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/ginet_terminal.lua $(1)/usr/lib/lua/luci/model/cbi/ginet_terminal.lua
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/ginet_stealth.lua $(1)/usr/lib/lua/luci/model/cbi/ginet_stealth.lua
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/ginet_cellwatch.lua $(1)/usr/lib/lua/luci/model/cbi/ginet_cellwatch.lua
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/ginet_perf.lua $(1)/usr/lib/lua/luci/model/cbi/ginet_perf.lua
 
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/ginet_modem.lua $(1)/usr/lib/lua/luci/controller/ginet_modem.lua

@@ -44,6 +44,20 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
     unexpected serving Cell ID / LAC changes
   - Coarse tower-based location from a **local offline** cell database (opt-in)
 
+- **Performance page**
+  - Performance-only tuning that does **not** weaken any security/hardening
+    control. All options are opt-in and default to off:
+    - **TCP MSS clamping** to the path MTU — fixes silent fragmentation /
+      black-holing that tanks throughput on cellular + WireGuard links
+    - **Bufferbloat control (SQM)** — applies a fair-queueing discipline
+      (`fq_codel` by default, or `cake`/`fq`/`sfq`) on the WAN device
+    - **Flow offload** (software, with optional hardware) — raises NAT
+      throughput. **Fail-closed**: it self-disables whenever a kill-switch is
+      configured or TTL normalization is active, since those controls must
+      inspect every packet
+  - The default WireGuard tunnel MTU is now `1420` (instead of blank) to avoid
+    per-packet fragmentation on typical cellular links
+
 - **Built-in Terminal page**
   - Admin-only LuCI page
   - Controlled PTY execution (`script` + timeout)

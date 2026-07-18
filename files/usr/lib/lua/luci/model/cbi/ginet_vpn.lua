@@ -138,8 +138,9 @@ ka.default = "25"
 
 mtu = st:option(Value, "mtu", translate("MTU"))
 mtu.datatype = "range(1280,1500)"
+mtu.default = "1420"
 mtu.placeholder = "1420"
-mtu.description = translate("Pin the tunnel MTU to normalize packet sizes and avoid fragmentation fingerprints. Leave blank for the default.")
+mtu.description = translate("Pin the tunnel MTU to normalize packet sizes and avoid fragmentation fingerprints. Default 1420 avoids per-packet fragmentation on most cellular links (use ~1280 with obfuscation overhead).")
 
 obfs = st:option(Flag, "obfuscation", translate("Obfuscation"))
 obfs.default = 0
