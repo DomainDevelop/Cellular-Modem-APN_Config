@@ -1,127 +1,98 @@
-# GiNet XE-3000 Puli AX - Cellular Modem Configuration Package
+# GiNet Cellular Modem + WireGuard Control (Alpha)
 
-A custom OpenWrt LuCI application for **GL.iNet XE-3000 (Puli AX)** focused on two things:
+LuCI package for OpenWrt/XE-3000 that combines:
+- Cellular APN management
+- Per-SIM WireGuard policy controls
+- Admin-only built-in terminal (controlled PTY execution)
 
-- a clear **Cellular** section for modem status and active modem controls
-- a persistent **APNs** section for editing SIM profile data even when a slot is inactive
+> Version channel: `0.2.0` (alpha track)
 
-## Highlights
+## Security Positioning
 
-- **Cellular** section shows modem device, SIM inserted/status, carrier, signal, current connection, active SIM slot, current IMEI, preferred network mode, and TTL.
-- **APNs** section keeps two editable SIM profiles with these fields:
-  - Name
-  - APN
-  - Proxy
-  - Port
-  - Username
-  - Password
-  - Server
-  - APN type
-  - MMSC
-  - MMS Proxy
-  - APN Protocol
-  - APN Roaming Protocol
-  - Network Type
-- **Capability-aware IMEI UX**:
-  - Only one IMEI is shown when the modem/backend exposes a shared modem IMEI.
-  - IMEI editing is only shown when a writable serial control path is detected.
-  - Unsupported per-SIM IMEI switching is not presented as a working feature.
-- **Per-slot persistence** through UCI (`/etc/config/ginet_modem`) with the active slot applied to `network.wwan`.
-- **Downloadable IPK workflow** for practical OpenWrt SDK targets relevant to XE-3000 / Filogic.
+This package implements best-practice hardening feasible on OpenWrt/LuCI (strict input validation, privilege boundaries, fail-closed firewall policy, secure update staging where possible). It does **not** claim literal GrapheneOS parity due to different platform and threat model.
 
-## LuCI navigation
+## Main Features
 
-After installation, open **Network → Cellular**.
+- **Cell Modem page**
+  - APN configuration
+  - Status display (IMEI/APN/signal/connection/SIM)
+  - Input sanitization and safer status rendering
 
-### Cellular section
+- **Cellular VPN page**
+  - SIM1/SIM2 VPN controls
+  - Per-SIM toggles:
+    - Enable VPN
+    - Auto-update WireGuard (24h cron check)
+    - Always-on VPN
+    - Block connections without VPN (kill-switch)
+  - WireGuard tunnel configuration list
+  - One active tunnel enforced per SIM
 
-Use this section to:
+- **Built-in Terminal page**
+  - Admin-only LuCI page
+  - Controlled PTY execution (`script` + timeout)
+  - Command safety policy blocks chaining/injection operators
 
-- inspect live modem status
-- choose the active SIM/profile (`sim1` or `sim2`)
-- review the IMEI currently in use
-- edit IMEI only when supported by the modem/backend
-- choose the preferred network generation from advertised options (`Auto`, `5G`, `4G`, `3G`, `2G`, `1G` if a backend ever exposes it)
-- persist a TTL override
+## Actions Artifact (Router-Installable Package Output)
 
-### APNs section
+The **Build OpenWrt Package** workflow (`.github/workflows/build-openwrt-package.yml`)
+compiles this repo with the official OpenWrt SDK and uploads an artifact containing:
+- installable `.ipk` package(s)
+- `SHA256SUMS`
+- `INSTALL.txt` (LuCI upload + `opkg` install instructions)
 
-Each SIM profile stays editable even when inactive. The active profile is highlighted, but both profiles remain available for manual preparation and testing.
+The build defaults to the XE-3000 class target: **OpenWrt 23.05.5, `mediatek/filogic`
+(`aarch64_cortex-a53`)**. Because the package is `PKGARCH:=all`, the resulting `.ipk`
+is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
 
-The active profile is applied by `/usr/bin/apply-ginet-modem-settings.sh` to `network.wwan` so standard OpenWrt networking can use the selected APN settings.
+### Get the package from the Actions tab
 
-## Files and configuration
+1. Open a completed run of **Build OpenWrt Package** (triggered by push, PR, or a
+   manual **Run workflow**).
+2. Download the artifact named like:
+   - `openwrt-ipk-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk`
+3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
+   `INSTALL.txt`.
 
-Key files:
+### Install offline on the router
 
-- `/etc/config/ginet_modem` - package UCI state
-- `/usr/bin/ginet-modem-status.sh` - defensive modem status collector
-- `/usr/bin/apply-ginet-modem-settings.sh` - applies the active profile to network/UCI/runtime settings
-- `/usr/lib/lua/luci/model/cbi/ginet_modem.lua` - LuCI UI
-- `.github/workflows/main.yml` - IPK build workflow
+**Option A — LuCI web upload (no SSH needed):**
+1. Log in to LuCI as admin.
+2. Go to **System → Software**.
+3. Click **Upload Package...**, choose the `.ipk`, and confirm.
 
-Example UCI layout:
-
-```uci
-config modem 'settings'
-	option enabled '1'
-	option active_slot 'sim1'
-	option network_mode 'auto'
-	option supported_network_modes 'auto,5g,4g,3g,2g'
-	option imei_scope 'global'
-	option ttl ''
-
-config apn 'sim1'
-	option name 'SIM 1'
-	option apn 'internet'
-	...
-
-config apn 'sim2'
-	option name 'SIM 2'
-	option apn 'internet'
-	...
+**Option B — `opkg` over SSH / USB:**
+```sh
+# copy the .ipk to the router (scp or USB), then:
+opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
+# if dependencies are missing and the router has internet:
+opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 ```
 
-## Build and download workflow
+Optionally verify integrity first with `sha256sum -c SHA256SUMS`.
 
-The GitHub Actions workflow builds downloadable `.ipk` artifacts directly from the OpenWrt SDK.
+The workflow also validates the generated `.ipk` format (`debian-binary`,
+`control.tar.*`, `data.tar.*`) before upload, so the downloaded artifact matches
+router package requirements.
 
-### Workflow targets
-
-Currently configured targets:
-
-- **OpenWrt 23.05.5 / mediatek-filogic** - primary XE-3000 relevant build
-- **OpenWrt 22.03.7 / mediatek-filogic** - compatibility build for older practical releases
-
-### How to download the package artifact
-
-1. Open the **Actions** tab in GitHub.
-2. Run **Build OpenWrt Package** manually or use artifacts from a push/PR run.
-3. Download the artifact named like:
-   - `luci-app-ginet-cellmodem-23.05.5-mediatek-filogic`
-4. Extract the artifact and install the included `.ipk` on the router with `opkg install`.
-
-Each uploaded artifact also includes a `build-info.txt` file with the OpenWrt version, target, and SDK URL used for the build.
-
-## Installation on router
+## Local Build (OpenWrt SDK)
 
 ```sh
-opkg update
-opkg install luci-app-ginet-cellmodem_1.1-1_all.ipk
-/etc/init.d/ginet-modem enable
-/etc/init.d/ginet-modem restart
+# inside OpenWrt SDK root
+printf 'src-link custom /path/to/Cellular-Modem-APN_Config\n' > feeds.conf.default
+./scripts/feeds update -a
+./scripts/feeds install -a
+make defconfig
+make package/luci-app-ginet-cellmodem/compile V=s
 ```
 
-## Validation notes
+## Notes / Limitations
 
-- Shell scripts are written to stay compatible with BusyBox `/bin/sh`.
-- The UI tolerates missing modem devices and missing live modem data.
-- APN values persist in UCI even if the currently edited slot is inactive.
-- Runtime IMEI/network-mode changes depend on modem/backend support and are intentionally hidden or reduced when unsupported.
+- Kill-switch behavior is fail-closed for WAN egress when configured and applied.
+- WireGuard auto-update staging uses `opkg` availability on target firmware.
+- Terminal is intentionally restricted and not a full unrestricted shell.
 
-## Known limitations
+## Package Dependencies
 
-- XE-3000 deployments typically expose **one modem IMEI shared across SIM slots**, not truly separate per-SIM IMEIs.
-- Direct runtime IMEI and preferred-network-mode changes depend on the modem serial control path and modem firmware support.
-- TTL application is best-effort and depends on available firewall tooling (`iptables` or `nft`).
-- Only APN/auth/protocol data is pushed into `network.wwan`; MMS/proxy-style fields are preserved in UCI for manual carrier-specific workflows.
+- Base LuCI/app runtime: `luci-base`, `libuci-lua`, `libubox`, `uqmi`, `kmod-usb-net-qmi-wwan`
+- VPN/WireGuard: `wireguard-tools`, `kmod-wireguard`, `kmod-crypto-lib-chacha20poly1305`, `kmod-crypto-lib-curve25519`

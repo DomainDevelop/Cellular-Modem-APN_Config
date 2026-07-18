@@ -1,12 +1,8 @@
-local fs = require "nixio.fs"
-local sys = require "luci.sys"
-local util = require "luci.util"
-local uci = require("luci.model.uci").cursor()
+require("luci.sys")
+require("luci.util")
 
-local json_available, json = pcall(require, "luci.jsonc")
-if not json_available then
-	json_available, json = pcall(require, "cjson")
-end
+local fs = require "nixio.fs"
+local util = require "luci.util"
 
 local function parse_csv_list(value)
 	local items = {}
@@ -114,6 +110,17 @@ local function ensure_defaults()
 	return changed
 end
 
+local APN_PATTERN = "^[%w%._%-]+$"
+
+local function safe_text(v, fallback)
+	v = tostring(v or fallback or "")
+	v = v:gsub("&", "&amp;")
+	v = v:gsub("<", "&lt;")
+	v = v:gsub(">", "&gt;")
+	v = v:gsub('"', "&quot;")
+	return v
+end
+
 local function read_modem_status()
 	local modem_status = {
 		imei = "N/A",
@@ -132,22 +139,17 @@ local function read_modem_status()
 		imei_editable = "0"
 	}
 
-	local status_file = "/tmp/ginet_modem_status.json"
 	if fs.access(status_file) then
-		local handle = io.open(status_file, "r")
-		if handle then
-			local payload = handle:read("*a")
-			handle:close()
-			if json_available and json and payload and payload ~= "" then
-				local ok, parsed = pcall(function()
-					if json.parse then
-						return json.parse(payload)
-					end
-					return json.decode(payload)
-				end)
-				if ok and type(parsed) == "table" then
-					for key, value in pairs(parsed) do
-						modem_status[key] = value
+		local f = io.open(status_file, "r")
+		if f then
+			local json_str = f:read("*a")
+			f:close()
+
+			if json_available and json then
+				local success, data = pcall(json.parse, json_str)
+				if success and type(data) == "table" then
+					for k, v in pairs(data) do
+						modem_status[k] = v
 					end
 				end
 			end
@@ -157,122 +159,71 @@ local function read_modem_status()
 	return modem_status
 end
 
-ensure_defaults()
+m = Map("ginet_modem", translate("Cell Modem Settings"),
+	translate("Configure APN and monitor cellular modem status."))
+
 local modem_status = read_modem_status()
-local active_slot = modem_status.active_slot == "sim2" and "sim2" or "sim1"
-local supported_modes = parse_csv_list(modem_status.supported_network_modes or "auto")
-if #supported_modes == 0 then
-	supported_modes = { "auto" }
-end
 
-m = Map("ginet_modem", translate("Cellular & APNs"),
-	translate("Manage modem status, active SIM preferences, and APN profiles for GL.iNet XE-3000 compatible cellular routers."))
+s_status = m:section(NamedSection, "settings", "modem", translate("Current Modem Status"))
+s_status.addremove = false
+s_status.anonymous = true
 
-local cellular = m:section(NamedSection, "settings", "modem", translate("Cellular"),
-	translate("Primary modem controls and live modem status."))
-cellular.addremove = false
-cellular.anonymous = true
-
-local o = cellular:option(DummyValue, "_device", translate("Modem Device"))
+local o = s_status:option(DummyValue, "_status_device", translate("Modem Device"))
 o.rawhtml = true
-o.default = modem_status.device ~= "Not detected"
-	and ('<strong>' .. modem_status.device .. '</strong>')
-	or '<span style="color:#a00;"><strong>' .. translate("Not detected") .. '</strong></span>'
+o.default = string.format("<strong>%s</strong>", safe_text(modem_status.device, "Not detected"))
 
-o = cellular:option(DummyValue, "_sim_inserted", translate("SIM Inserted"))
-o.default = modem_status.sim_inserted or translate("Unknown")
+o = s_status:option(DummyValue, "_status_imei", translate("Device IMEI"))
+o.default = safe_text(modem_status.imei, "N/A")
 
-o = cellular:option(DummyValue, "_sim_status", translate("SIM Status"))
-o.default = modem_status.sim_status or translate("Unknown")
+o = s_status:option(DummyValue, "_status_apn", translate("Current APN"))
+o.default = safe_text(modem_status.apn, "internet")
 
-o = cellular:option(DummyValue, "_carrier", translate("Carrier / Operator"))
-o.default = modem_status.carrier or translate("Unknown")
+o = s_status:option(DummyValue, "_status_connection", translate("Connection Type"))
+o.default = safe_text(modem_status.connection_type, "Disconnected")
 
-o = cellular:option(DummyValue, "_connection_type", translate("Connection Type"))
-o.default = modem_status.connection_type or translate("Disconnected")
+o = s_status:option(DummyValue, "_status_data", translate("Data Connection"))
+o.default = safe_text(modem_status.data_status, "Disconnected")
 
-o = cellular:option(DummyValue, "_data_status", translate("Data Session"))
-o.default = modem_status.data_status or translate("Disconnected")
+o = s_status:option(DummyValue, "_status_signal", translate("Signal Strength"))
+local signal = modem_status.signal or "N/A"
+o.default = safe_text(signal ~= "N/A" and (tostring(signal) .. " dBm") or "No Signal", "No Signal")
 
-o = cellular:option(DummyValue, "_signal", translate("Signal Strength"))
-o.default = modem_status.signal ~= "N/A"
-	and string.format("%s dBm", modem_status.signal)
-	or translate("Unavailable")
+o = s_status:option(DummyValue, "_status_sim", translate("SIM Card Status"))
+o.default = safe_text(modem_status.sim_status, "Unknown")
 
-o = cellular:option(ListValue, "active_slot", translate("Active SIM / Slot"),
-	translate("The selected SIM profile is applied to network.wwan and can stay active while the other profile remains editable."))
-o:value("sim1", translate("SIM 1"))
-o:value("sim2", translate("SIM 2"))
-o.default = active_slot
+o = s_status:option(DummyValue, "_status_update", translate("Last Updated"))
+o.default = safe_text(modem_status.timestamp or os.date("%Y-%m-%d %H:%M:%S"), "")
 
-local imei_value = modem_status.imei or get_uci("settings", "imei", "N/A")
-o = cellular:option(DummyValue, "_imei", translate("IMEI In Use"))
-o.default = imei_value
+s_config = m:section(NamedSection, "settings", "modem", translate("Configuration"))
+s_config.addremove = false
+s_config.anonymous = true
 
-if tostring(modem_status.imei_editable or "0") == "1" then
-	o = cellular:option(Value, "imei", translate("Editable IMEI"),
-		translate("Only shown when the modem/backend exposes a writable IMEI control path."))
-	o.placeholder = imei_value ~= "N/A" and imei_value or "123456789012345"
-	o.rmempty = true
-	function o.validate(self, value)
-		if not value or value == "" then
-			return value
-		end
-		if value:match("^%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d$") then
-			return value
-		end
-		return nil, translate("IMEI must contain exactly 15 digits.")
-	end
-else
-	o = cellular:option(DummyValue, "_imei_note", translate("IMEI Capability"))
-	o.rawhtml = true
-	o.default = '<span style="color:#666;">' ..
-		translate("This modem currently exposes one shared IMEI. Per-SIM IMEI switching/editing is unavailable, so only the active modem IMEI is shown.") ..
-		'</span>'
-end
-
-o = cellular:option(ListValue, "network_mode", translate("Preferred Network Mode"),
-	translate("Only advertised modem modes are listed. Unsupported generations stay hidden."))
-for _, mode in ipairs(supported_modes) do
-	o:value(mode, mode_label(mode))
-end
-o.default = modem_status.preferred_network_mode or "auto"
-
-local ttl = cellular:option(Value, "ttl", translate("TTL"),
-	translate("Persist a TTL override. Runtime application is attempted only when firewall tooling is present."))
-ttl.placeholder = "64"
-ttl.rmempty = true
-function ttl.validate(self, value)
-	local validated = validate_integer_range(value, 1, 255, true)
-	if validated ~= nil then
-		return validated
-	end
-	return nil, translate("TTL must be a whole number between 1 and 255.")
-end
-
-o = cellular:option(Flag, "enabled", translate("Enable Cellular Settings Application"),
-	translate("When disabled, APN profiles still persist but modem/network changes are not actively applied."))
-o.default = get_uci("settings", "enabled", "1")
+o = s_config:option(Value, "apn", translate("Access Point Name (APN)"))
+o.placeholder = "internet"
+o.datatype = "and(maxlength(64),string)"
 o.rmempty = false
-
-local apn_info = m:section(TypedSection, "apn", translate("APNs"),
-	translate("Each SIM profile stays editable even when inactive. The currently selected active SIM is highlighted below."))
-apn_info.addremove = false
-apn_info.anonymous = false
-
-function apn_info.cfgsections()
-	return { "sim1", "sim2" }
+function o.validate(self, value)
+	if value and value:match(APN_PATTERN) then
+		return value
+	end
+	return nil, translate("APN can only contain letters, numbers, dots, underscores, and dashes")
 end
 
-function apn_info.sectiontitle(self, section)
-	local label = get_uci(section, "name", section == "sim1" and "SIM 1" or "SIM 2")
-	local state = section == active_slot and translate("Active") or translate("Inactive")
-	return string.format("%s (%s)", label, state)
-end
+local enabled = s_config:option(Flag, "enabled", translate("Enable Cellular Modem"))
+enabled.default = 1
+enabled.rmempty = false
 
-local function add_network_mode_choices(option)
-	for _, mode in ipairs(supported_modes) do
-		option:value(mode, mode_label(mode))
+function m.on_save(self)
+	local apn = self.uci:get("ginet_modem", "settings", "apn")
+	local enabled = self.uci:get("ginet_modem", "settings", "enabled")
+
+	if enabled == "1" and apn and #apn <= 64 and apn:match(APN_PATTERN) then
+		local rc = luci.sys.call(string.format("/usr/bin/apply-ginet-modem-settings.sh %q >/dev/null 2>&1", apn))
+		if rc ~= 0 then
+			luci.sys.syslog("warning", "apply-ginet-modem-settings.sh failed with exit code " .. tostring(rc))
+		else
+			util.exec("/usr/bin/ginet-modem-status.sh > /tmp/ginet_modem_status.json 2>/dev/null &")
+		end
 	end
 end
 
