@@ -56,7 +56,7 @@ jobs:
         run: |
           mkdir -p "$(dirname "$SDK_ARCHIVE")"
           if [ ! -f "$SDK_ARCHIVE" ]; then
-            curl -fL --retry 5 --retry-delay 5 --retry-all-errors \
+            curl -fL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 --max-time 1800 \
               -o "$SDK_ARCHIVE" "$SDK_URL"
           fi
           ls -lh "$SDK_ARCHIVE"
