@@ -1,326 +1,127 @@
 # GiNet XE-3000 Puli AX - Cellular Modem Configuration Package
 
-A custom OpenWrt LuCI application for the **GiNet XE-3000 Puli AX** (GL-XE3000) that provides a web interface to display and configure cellular modem settings including IMEI, APN, and connection status.
+A custom OpenWrt LuCI application for **GL.iNet XE-3000 (Puli AX)** focused on two things:
 
-## Features
+- a clear **Cellular** section for modem status and active modem controls
+- a persistent **APNs** section for editing SIM profile data even when a slot is inactive
 
-✅ **Display Current Modem Status**
-- Current IMEI (device identifier)
-- Active APN (Access Point Name)
-- Signal strength (dBm)
-- Connection type (4G LTE / 5G NR)
+## Highlights
 
-✅ **Configure Settings**
-- Modify APN settings
-- View IMEI information
-- Enable/disable cellular modem
+- **Cellular** section shows modem device, SIM inserted/status, carrier, signal, current connection, active SIM slot, current IMEI, preferred network mode, and TTL.
+- **APNs** section keeps two editable SIM profiles with these fields:
+  - Name
+  - APN
+  - Proxy
+  - Port
+  - Username
+  - Password
+  - Server
+  - APN type
+  - MMSC
+  - MMS Proxy
+  - APN Protocol
+  - APN Roaming Protocol
+  - Network Type
+- **Capability-aware IMEI UX**:
+  - Only one IMEI is shown when the modem/backend exposes a shared modem IMEI.
+  - IMEI editing is only shown when a writable serial control path is detected.
+  - Unsupported per-SIM IMEI switching is not presented as a working feature.
+- **Per-slot persistence** through UCI (`/etc/config/ginet_modem`) with the active slot applied to `network.wwan`.
+- **Downloadable IPK workflow** for practical OpenWrt SDK targets relevant to XE-3000 / Filogic.
 
-✅ **Full Hardware Compatibility**
-- Quectel RM520N-GL modem support
-- MediaTek Filogic chipset optimized
-- QMI (Qualcomm MSM Interface) protocol
-- Dual SIM card support
-- NSA & SA 5G network support
+## LuCI navigation
 
-✅ **Clean Web Interface**
-- LuCI web UI integration
-- Status section (read-only display)
-- Configuration section (editable fields)
-- Save & Apply functionality
+After installation, open **Network → Cellular**.
 
-## Device Specifications (GiNet XE-3000 Puli AX)
+### Cellular section
 
-| Component | Specification |
-|-----------|---------------|
-| **Modem Chipset** | Quectel RM520N-GL |
-| **CPU** | MediaTek Filogic (dual-core @ 1.3 GHz) |
-| **Cellular** | 5G NR (NSA/SA) + 4G LTE (dual SIM) |
-| **Wi-Fi** | IEEE 802.11ax (Wi-Fi 6), dual-band |
-| **WAN** | 10/100/1000/2500 Mbps Gigabit Ethernet |
-| **Ports** | MicroSD, USB-A, SMA antennae |
-| **Battery** | 6400mAh (portable) |
-| **Firmware Base** | OpenWrt 21.02+ / GL.iNet custom build |
+Use this section to:
 
-## Installation
+- inspect live modem status
+- choose the active SIM/profile (`sim1` or `sim2`)
+- review the IMEI currently in use
+- edit IMEI only when supported by the modem/backend
+- choose the preferred network generation from advertised options (`Auto`, `5G`, `4G`, `3G`, `2G`, `1G` if a backend ever exposes it)
+- persist a TTL override
 
-### Prerequisites
+### APNs section
 
-```bash
-# SSH into your GiNet XE-3000 device
-ssh root@192.168.8.1  # Default GL.iNet address
+Each SIM profile stays editable even when inactive. The active profile is highlighted, but both profiles remain available for manual preparation and testing.
 
-# Update package lists
+The active profile is applied by `/usr/bin/apply-ginet-modem-settings.sh` to `network.wwan` so standard OpenWrt networking can use the selected APN settings.
+
+## Files and configuration
+
+Key files:
+
+- `/etc/config/ginet_modem` - package UCI state
+- `/usr/bin/ginet-modem-status.sh` - defensive modem status collector
+- `/usr/bin/apply-ginet-modem-settings.sh` - applies the active profile to network/UCI/runtime settings
+- `/usr/lib/lua/luci/model/cbi/ginet_modem.lua` - LuCI UI
+- `.github/workflows/main.yml` - IPK build workflow
+
+Example UCI layout:
+
+```uci
+config modem 'settings'
+	option enabled '1'
+	option active_slot 'sim1'
+	option network_mode 'auto'
+	option supported_network_modes 'auto,5g,4g,3g,2g'
+	option imei_scope 'global'
+	option ttl ''
+
+config apn 'sim1'
+	option name 'SIM 1'
+	option apn 'internet'
+	...
+
+config apn 'sim2'
+	option name 'SIM 2'
+	option apn 'internet'
+	...
+```
+
+## Build and download workflow
+
+The GitHub Actions workflow builds downloadable `.ipk` artifacts directly from the OpenWrt SDK.
+
+### Workflow targets
+
+Currently configured targets:
+
+- **OpenWrt 23.05.5 / mediatek-filogic** - primary XE-3000 relevant build
+- **OpenWrt 22.03.7 / mediatek-filogic** - compatibility build for older practical releases
+
+### How to download the package artifact
+
+1. Open the **Actions** tab in GitHub.
+2. Run **Build OpenWrt Package** manually or use artifacts from a push/PR run.
+3. Download the artifact named like:
+   - `luci-app-ginet-cellmodem-23.05.5-mediatek-filogic`
+4. Extract the artifact and install the included `.ipk` on the router with `opkg install`.
+
+Each uploaded artifact also includes a `build-info.txt` file with the OpenWrt version, target, and SDK URL used for the build.
+
+## Installation on router
+
+```sh
 opkg update
-
-# Install required dependencies
-opkg install uqmi kmod-usb-net-qmi-wwan kmod-usb-serial-option usb-modeswitch luci
-```
-
-### Install Package
-
-**Option 1: From this repository**
-
-```bash
-# Download the compiled .ipk package
-wget https://github.com/DomainDevelop/Cellular-Modem-APN_Config/releases/download/v1.0/luci-app-ginet-cellmodem_1.0-1_all.ipk
-
-# Install
-opkg install luci-app-ginet-cellmodem_1.0-1_all.ipk
-
-# Enable and start service
+opkg install luci-app-ginet-cellmodem_1.1-1_all.ipk
 /etc/init.d/ginet-modem enable
-/etc/init.d/ginet-modem start
-```
-
-**Option 2: Build from source (OpenWrt SDK)**
-
-```bash
-# Clone repository
-git clone https://github.com/DomainDevelop/Cellular-Modem-APN_Config.git
-cd Cellular-Modem-APN_Config
-
-# Place in OpenWrt package directory
-cp -r . /path/to/openwrt/package/luci-app-ginet-cellmodem
-
-# Configure and build
-cd /path/to/openwrt
-./scripts/feeds update -a
-./scripts/feeds install luci-app-ginet-cellmodem
-make menuconfig  # Select LuCI → Applications → GiNet Cell Modem Configuration
-make package/luci-app-ginet-cellmodem/compile V=s
-```
-
-## Usage
-
-### Access Web Interface
-
-1. Open browser and navigate to your router:
-   - **GL.iNet default:** `http://192.168.8.1`
-   - **Custom OpenWrt:** Your router's IP address
-
-2. Log in with admin credentials
-
-3. Navigate to: **Network → Cell Modem** (or **System → Cell Modem** depending on LuCI version)
-
-### Status Display
-
-The interface shows real-time modem information:
-- **Current IMEI:** Your device's international mobile equipment identity
-- **Current APN:** Configured access point name
-- **Signal Strength:** Signal quality in dBm (closer to 0 = stronger)
-- **Connection Type:** 5G NR, 4G LTE, or Disconnected
-
-### Configure Settings
-
-Edit the configuration section:
-
-1. **IMEI Field:** Shows your device IMEI (read-only for security)
-   - ⚠️ WARNING: Changing IMEI may be illegal in your region
-
-2. **APN Field:** Enter your carrier's APN
-   - Common examples: `internet` (AT&T), `h2g2` (T-Mobile), `uninet` (Verizon)
-   - Contact your carrier if unsure
-
-3. **Enabled:** Check to enable cellular modem
-
-4. **Save & Apply:** Changes apply immediately
-
-## File Structure
-
-```
-luci-app-ginet-cellmodem/
-├── Makefile                                          # Package build configuration
-├── README.md                                         # This file
-├── files/
-│   ├── etc/
-│   │   ├── config/
-│   │   │   └── ginet_modem                          # UCI configuration file
-│   │   └── init.d/
-│   │       └── ginet-modem                          # Init script for service
-│   └── usr/
-│       ├── bin/
-│       │   ├── ginet-modem-status.sh               # Modem status detection
-│       │   └── apply-ginet-modem-settings.sh       # Apply settings to modem
-│       └── lib/lua/luci/
-│           ├── controller/
-│           │   └── ginet_modem.lua                 # LuCI controller
-│           └── model/cbi/
-│               └── ginet_modem.lua                 # LuCI web interface
-```
-
-## Technical Details
-
-### Modem Detection
-
-The package automatically detects your modem interface:
-- **Primary:** `/dev/cdc-wdm0` (QMI device, recommended)
-- **Fallback:** `/dev/ttyUSB0` (Serial device)
-
-### Status Retrieval
-
-Status is retrieved via:
-- `uqmi` commands for QMI modem interface
-- `AT+CGSN` for IMEI (if serial interface available)
-- Signal info from `/proc/signal` or `uqmi --get-signal-info`
-
-### Settings Application
-
-When you save settings, the package:
-1. Updates UCI configuration (`/etc/config/ginet_modem`)
-2. Updates network config (`/etc/config/network`)
-3. Applies APN via `uqmi --set-data-profile`
-4. Reloads network services
-
-### Backend Scripts
-
-**ginet-modem-status.sh**
-- Queries modem for IMEI, APN, signal, connection type
-- Outputs JSON for web interface
-- Runs every 60 seconds (can be configured)
-
-**apply-ginet-modem-settings.sh**
-- Takes IMEI and APN as parameters
-- Safely applies settings without interrupting connection
-- Handles both QMI and serial interfaces
-
-## Troubleshooting
-
-### Modem Not Detected
-
-```bash
-# SSH into device
-ssh root@192.168.8.1
-
-# Check USB device
-lsusb
-
-# Check QMI device nodes
-ls -la /dev/cdc-wdm0 /dev/ttyUSB*
-
-# Check dmesg for errors
-dmesg | tail -20
-```
-
-### Cannot Access Web Interface
-
-```bash
-# Ensure LuCI is running
-/etc/init.d/uhttpd start
-/etc/init.d/uhttpd enable
-
-# Check if service is listening
-netstat -tlnp | grep uhttpd
-```
-
-### Settings Not Applying
-
-```bash
-# Check package installation
-opkg list-installed | grep ginet
-
-# Check service status
-/etc/init.d/ginet-modem status
-
-# View logs
-logread | grep ginet
-tail -f /tmp/ginet_modem_status.json
-```
-
-### Restore Default Settings
-
-```bash
-ssh root@192.168.8.1
-
-# Reset configuration
-rm /etc/config/ginet_modem
 /etc/init.d/ginet-modem restart
-
-# Or restore via web UI: System → Backup/Restore
 ```
 
-## Building from Source
+## Validation notes
 
-### Requirements
+- Shell scripts are written to stay compatible with BusyBox `/bin/sh`.
+- The UI tolerates missing modem devices and missing live modem data.
+- APN values persist in UCI even if the currently edited slot is inactive.
+- Runtime IMEI/network-mode changes depend on modem/backend support and are intentionally hidden or reduced when unsupported.
 
-- OpenWrt Build System (tested on 21.02+)
-- Cross-compiler for your target (MediaTek MT7981 for XE-3000)
-- `make`, `git`
+## Known limitations
 
-### Build Steps
-
-```bash
-# Clone OpenWrt
-git clone https://github.com/openwrt/openwrt.git openwrt-build
-cd openwrt-build
-git checkout openwrt-21.02  # or desired version
-
-# Add this package
-git clone https://github.com/DomainDevelop/Cellular-Modem-APN_Config.git \
-  package/luci-app-ginet-cellmodem
-
-# Configure feeds
-./scripts/feeds update -a
-./scripts/feeds install -a
-
-# Configure build
-make menuconfig
-
-# In menuconfig: 
-# - Select Target (MediaTek Filogic for XE-3000)
-# - LuCI → Applications → [*] LuCI app - GiNet Cell Modem Configuration
-
-# Build
-make -j4
-
-# Find output
-ls -lh bin/packages/*/luci/*.ipk | grep ginet
-```
-
-## Known Limitations
-
-⚠️ **IMEI Modification:**
-- Most production modems (including RM520N-GL) do **not** allow IMEI changes via software
-- IMEI is burned into hardware during manufacturing
-- This package displays IMEI read-only for legal/security compliance
-- **Attempting to change IMEI is illegal in many countries**
-
-⚠️ **Regional Restrictions:**
-- Some countries restrict 5G frequencies or modem capabilities
-- Check local regulations before use in restricted regions
-
-⚠️ **Carrier Compatibility:**
-- Not all carriers support all LTE/5G bands
-- Contact your carrier for compatible APN and settings
-
-## Support & Issues
-
-For issues, suggestions, or contributions:
-
-1. **Check existing issues:** [GitHub Issues](https://github.com/DomainDevelop/Cellular-Modem-APN_Config/issues)
-2. **Create new issue:** Include:
-   - Firmware version (`uname -a`)
-   - Error messages (from `logread`)
-   - Device model & modem chipset
-3. **Submit PR:** Welcome for improvements!
-
-## License
-
-This project is provided as-is for use with GiNet XE-3000 Puli AX routers running OpenWrt.
-
-## References
-
-- [GiNet XE-3000 Product Page](https://www.gl-inet.com/products/gl-xe3000/)
-- [Quectel RM520N-GL Documentation](https://www.quectel.com/product/rm520n-gl/)
-- [OpenWrt QMI Guide](https://openwrt.org/docs/guide-user/network/wan/wwan/using_qmi_wwan)
-- [OpenWrt XE-3000 Techdata](https://openwrt.org/toh/hwdata/gl.inet/gl.inet_gl-xe3000)
-- [MediaTek Filogic](https://mediatek.com)
-
-## Contributors
-
-- **DomainDevelop** - Original package author
-
----
-
-**Last Updated:** July 2026  
-**Package Version:** 1.0  
-**Compatible Firmware:** OpenWrt 21.02+, GL.iNet custom builds
+- XE-3000 deployments typically expose **one modem IMEI shared across SIM slots**, not truly separate per-SIM IMEIs.
+- Direct runtime IMEI and preferred-network-mode changes depend on the modem serial control path and modem firmware support.
+- TTL application is best-effort and depends on available firewall tooling (`iptables` or `nft`).
+- Only APN/auth/protocol data is pushed into `network.wwan`; MMS/proxy-style fields are preserved in UCI for manual carrier-specific workflows.

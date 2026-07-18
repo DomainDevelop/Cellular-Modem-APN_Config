@@ -1,212 +1,251 @@
 #!/bin/sh
 # GiNet Modem Status Script
-# Queries the Quectel RM520N-GL modem for IMEI, APN, signal, connection type
-# Outputs JSON for LuCI web interface
-# 
-# Targets: GiNet XE-3000 Puli AX (GL-XE3000) with RM520N-GL modem
-# Chipset: MediaTek Filogic
+# Outputs JSON for LuCI and keeps capability checks defensive.
 
 set -e
 
 . /lib/functions.sh
 
-# Configuration
 DEVICE_QMI="/dev/cdc-wdm0"
 DEVICE_SERIAL="/dev/ttyUSB0"
-CONFIG_FILE="/etc/config/ginet_modem"
+CONFIG_NAME="ginet_modem"
 STATUS_FILE="/tmp/ginet_modem_status.json"
-LOG_FILE="/var/log/ginet_modem.log"
 
-# Detect actual device
+have_command() {
+	command -v "$1" >/dev/null 2>&1
+}
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+uci_get_value() {
+	uci -q get "$CONFIG_NAME.$1.$2" 2>/dev/null || true
+}
+
+get_config_value() {
+	local value
+	value="$(uci_get_value "$1" "$2")"
+	if [ -n "$value" ]; then
+		echo "$value"
+	else
+		echo "$3"
+	fi
+}
+
+parse_json_string() {
+	printf '%s' "$1" | sed -n "s/.*\"$2\":[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1
+}
+
+parse_json_number() {
+	printf '%s' "$1" | sed -n "s/.*\"$2\":[[:space:]]*\(-*[0-9][0-9]*\).*/\1/p" | head -n 1
+}
+
 detect_modem_device() {
-	if [ -e "$DEVICE_QMI" ]; then
+	if [ -c "$DEVICE_QMI" ]; then
 		echo "$DEVICE_QMI"
-	elif [ -e "$DEVICE_SERIAL" ]; then
+	elif [ -c "$DEVICE_SERIAL" ]; then
 		echo "$DEVICE_SERIAL"
 	else
 		echo ""
 	fi
 }
 
-# Get IMEI from UCI config first, then try modem
 get_imei() {
-	local imei=""
-	
-	# Try from config file first
-	[ -f "$CONFIG_FILE" ] && {
-		config_load ginet_modem 2>/dev/null
-		config_get imei settings imei
-	}
-	
-	# If not set, try to query modem
-	if [ -z "$imei" ] && [ -c "$DEVICE_QMI" ]; then
-		imei=$(timeout 3 uqmi -d "$DEVICE_QMI" --get-device-serial 2>/dev/null | tr -d '"' || true)
+	local imei
+	imei="$(uci_get_value settings imei)"
+
+	if [ -z "$imei" ] && [ -c "$DEVICE_QMI" ] && have_command uqmi; then
+		imei="$(timeout 3 uqmi -d "$DEVICE_QMI" --get-device-serial 2>/dev/null | tr -d '"' | head -n 1 || true)"
 	fi
-	
-	# Fallback: try AT command on serial device
+
 	if [ -z "$imei" ] && [ -c "$DEVICE_SERIAL" ]; then
-		imei=$(timeout 2 sh -c "echo 'AT+CGSN' > $DEVICE_SERIAL; sleep 1; cat $DEVICE_SERIAL" 2>/dev/null | grep -oE '[0-9]{15}' | head -1 || true)
+		imei="$(timeout 3 sh -c "printf 'AT+CGSN\r' > '$DEVICE_SERIAL'; sleep 1; head -n 5 '$DEVICE_SERIAL'" 2>/dev/null | grep -Eo '[0-9]{15}' | head -n 1 || true)"
 	fi
-	
+
 	echo "${imei:-N/A}"
 }
 
-# Get APN from config
-get_apn() {
-	local apn=""
-	
-	[ -f "$CONFIG_FILE" ] && {
-		config_load ginet_modem 2>/dev/null
-		config_get apn settings apn
-	}
-	
-	# Fallback: check network config
-	if [ -z "$apn" ]; then
-		apn=$(uci -q get network.wwan.apn 2>/dev/null || echo "")
-	fi
-	
-	echo "${apn:-internet}"
+get_active_slot() {
+	case "$(uci_get_value settings active_slot)" in
+		sim2) echo "sim2" ;;
+		*) echo "sim1" ;;
+	esac
 }
 
-# Get signal strength in dBm
+get_sim_status() {
+	local sim_status="Unknown"
+	if [ -c "$DEVICE_QMI" ] && have_command uqmi; then
+		local output
+		output="$(timeout 3 uqmi -d "$DEVICE_QMI" --get-sim-state 2>/dev/null || timeout 3 uqmi -d "$DEVICE_QMI" --get-sim-status 2>/dev/null || true)"
+		sim_status="$(parse_json_string "$output" status)"
+		[ -n "$sim_status" ] || sim_status="$(parse_json_string "$output" sim_state)"
+		[ -n "$sim_status" ] || sim_status="Unknown"
+	fi
+	echo "$sim_status"
+}
+
+get_sim_inserted() {
+	case "$(get_sim_status)" in
+		*ready*|*Ready*|*pin*|*PIN*|*locked*|*Locked*) echo "Yes" ;;
+		*absent*|*Absent*|*missing*|*Missing*|"N/A") echo "No" ;;
+		*) echo "Unknown" ;;
+	esac
+}
+
+get_carrier() {
+	local carrier="Unknown"
+	if [ -c "$DEVICE_QMI" ] && have_command uqmi; then
+		local output
+		output="$(timeout 3 uqmi -d "$DEVICE_QMI" --get-home-network 2>/dev/null || true)"
+		carrier="$(parse_json_string "$output" description)"
+		if [ -z "$carrier" ]; then
+			output="$(timeout 3 uqmi -d "$DEVICE_QMI" --get-serving-system 2>/dev/null || true)"
+			carrier="$(parse_json_string "$output" description)"
+		fi
+	fi
+	echo "${carrier:-Unknown}"
+}
+
 get_signal_strength() {
 	local signal=""
-	
-	if [ -c "$DEVICE_QMI" ]; then
-		signal=$(timeout 3 uqmi -d "$DEVICE_QMI" --get-signal-info 2>/dev/null | grep -oP '"rssi":\s*\K-?\d+' | head -1 || true)
+	if [ -c "$DEVICE_QMI" ] && have_command uqmi; then
+		local output
+		output="$(timeout 3 uqmi -d "$DEVICE_QMI" --get-signal-info 2>/dev/null || true)"
+		signal="$(parse_json_number "$output" rssi)"
 	fi
-	
 	echo "${signal:-N/A}"
 }
 
-# Get connection type (5G, 4G, etc.)
 get_connection_type() {
 	local connection="Disconnected"
-	local network_type=""
-	
-	if [ -c "$DEVICE_QMI" ]; then
-		# Get serving system info (5G, LTE, etc.)
-		local sys_info=$(timeout 3 uqmi -d "$DEVICE_QMI" --get-serving-system 2>/dev/null || true)
-		
-		# Check for 5G
-		echo "$sys_info" | grep -q "nr5g.*true" && connection="5G NR (NSA)" && return 0
-		echo "$sys_info" | grep -q "5gnr.*true" && connection="5G NR (SA)" && return 0
-		
-		# Check for 4G/LTE
-		echo "$sys_info" | grep -q "lte.*true" && connection="4G LTE" && return 0
-		
-		# Try alternative: get network type
-		network_type=$(echo "$sys_info" | grep -oP '"registration":\s*"\K[^"]+' | head -1 || true)
-		
-		case "$network_type" in
-			*"5g"*|*"nr"*) connection="5G NR" ;;
-			*"lte"*|*"4g"*) connection="4G LTE" ;;
-			*"3g"*|*"umts"*) connection="3G UMTS" ;;
-			*) connection="Searching..." ;;
+	if [ -c "$DEVICE_QMI" ] && have_command uqmi; then
+		local output
+		output="$(timeout 3 uqmi -d "$DEVICE_QMI" --get-serving-system 2>/dev/null || true)"
+		case "$output" in
+			*nr5g*true*|*5gnr*true*) connection="5G NR" ;;
+			*lte*true*) connection="4G LTE" ;;
+			*umts*true*|*wcdma*true*) connection="3G UMTS" ;;
+			*gsm*true*) connection="2G GSM" ;;
+			*registered*) connection="Registered" ;;
 		esac
 	fi
-	
 	echo "$connection"
 }
 
-# Get data connection status
 get_data_status() {
 	local status="Disconnected"
-	
-	if [ -c "$DEVICE_QMI" ]; then
-		local data_status=$(timeout 3 uqmi -d "$DEVICE_QMI" --get-data-status 2>/dev/null | grep -oP '"current":\s*"\K[^"]+' || true)
-		
-		if echo "$data_status" | grep -q "connected"; then
-			status="Connected"
-		elif echo "$data_status" | grep -q "disconnected"; then
-			status="Disconnected"
-		fi
+	if [ -c "$DEVICE_QMI" ] && have_command uqmi; then
+		local output current
+		output="$(timeout 3 uqmi -d "$DEVICE_QMI" --get-data-status 2>/dev/null || true)"
+		current="$(parse_json_string "$output" current)"
+		case "$current" in
+			*connected*) status="Connected" ;;
+			*connecting*) status="Connecting" ;;
+			*disconnected*) status="Disconnected" ;;
+		esac
 	fi
-	
 	echo "$status"
 }
 
-# Get SIM status
-get_sim_status() {
-	local sim_status=""
-	
-	if [ -c "$DEVICE_QMI" ]; then
-		sim_status=$(timeout 3 uqmi -d "$DEVICE_QMI" --get-sim-status 2>/dev/null | grep -oP '"status":\s*"\K[^"]+' || true)
-	fi
-	
-	echo "${sim_status:-Unknown}"
+get_preferred_network_mode() {
+	local slot value
+	slot="$(get_active_slot)"
+	value="$(uci_get_value "$slot" network_type)"
+	[ -n "$value" ] || value="$(uci_get_value settings network_mode)"
+	echo "${value:-auto}"
 }
 
-# Main function
-main() {
-	local modem_device=$(detect_modem_device)
-	
-	# If no device found, return error state
-	if [ -z "$modem_device" ]; then
-		cat <<EOF
-{
-  "status": "error",
-  "message": "Modem device not found",
-  "device": "Not detected",
-  "imei": "N/A",
-  "apn": "Not configured",
-  "signal": "N/A",
-  "signal_unit": "dBm",
-  "connection_type": "No device",
-  "data_status": "Disconnected",
-  "sim_status": "N/A",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-		return 1
+get_supported_network_modes() {
+	local modes
+	modes="$(uci_get_value settings supported_network_modes)"
+	if [ -z "$modes" ]; then
+		if [ -c "$DEVICE_SERIAL" ]; then
+			modes="auto,5g,4g,3g,2g"
+		else
+			modes="auto"
+		fi
 	fi
-	
-	# Query all modem information
-	local imei=$(get_imei)
-	local apn=$(get_apn)
-	local signal=$(get_signal_strength)
-	local connection=$(get_connection_type)
-	local data_status=$(get_data_status)
-	local sim_status=$(get_sim_status)
-	
-	# Output JSON status
-	cat <<EOF
+	echo "$modes"
+}
+
+get_imei_scope() {
+	echo "$(get_config_value settings imei_scope global)"
+}
+
+get_imei_editable() {
+	local allow_edit
+	allow_edit="$(get_config_value settings allow_imei_edit 1)"
+	if [ "$allow_edit" = "1" ] && [ -c "$DEVICE_SERIAL" ]; then
+		echo "1"
+	else
+		echo "0"
+	fi
+}
+
+get_active_profile_name() {
+	local slot
+	slot="$(get_active_slot)"
+	echo "$(get_config_value "$slot" name "$slot")"
+}
+
+get_apn() {
+	local slot apn
+	slot="$(get_active_slot)"
+	apn="$(uci_get_value "$slot" apn)"
+	[ -n "$apn" ] || apn="$(uci_get_value settings apn)"
+	echo "${apn:-internet}"
+}
+
+main() {
+	local modem_device imei apn signal connection data_status sim_status sim_inserted carrier
+	local active_slot preferred_mode supported_modes imei_scope imei_editable active_profile
+
+	modem_device="$(detect_modem_device)"
+	imei="$(get_imei)"
+	apn="$(get_apn)"
+	signal="$(get_signal_strength)"
+	connection="$(get_connection_type)"
+	data_status="$(get_data_status)"
+	sim_status="$(get_sim_status)"
+	sim_inserted="$(get_sim_inserted)"
+	carrier="$(get_carrier)"
+	active_slot="$(get_active_slot)"
+	preferred_mode="$(get_preferred_network_mode)"
+	supported_modes="$(get_supported_network_modes)"
+	imei_scope="$(get_imei_scope)"
+	imei_editable="$(get_imei_editable)"
+	active_profile="$(get_active_profile_name)"
+
+	cat <<EOF_JSON
 {
   "status": "ok",
-  "device": "$modem_device",
-  "imei": "$imei",
-  "apn": "$apn",
-  "signal": "$signal",
+  "device": "$(json_escape "${modem_device:-Not detected}")",
+  "imei": "$(json_escape "$imei")",
+  "apn": "$(json_escape "$apn")",
+  "carrier": "$(json_escape "$carrier")",
+  "signal": "$(json_escape "$signal")",
   "signal_unit": "dBm",
-  "connection_type": "$connection",
-  "data_status": "$data_status",
-  "sim_status": "$sim_status",
+  "connection_type": "$(json_escape "$connection")",
+  "data_status": "$(json_escape "$data_status")",
+  "sim_status": "$(json_escape "$sim_status")",
+  "sim_inserted": "$(json_escape "$sim_inserted")",
+  "active_slot": "$(json_escape "$active_slot")",
+  "active_profile": "$(json_escape "$active_profile")",
+  "preferred_network_mode": "$(json_escape "$preferred_mode")",
+  "supported_network_modes": "$(json_escape "$supported_modes")",
+  "imei_scope": "$(json_escape "$imei_scope")",
+  "imei_editable": "$(json_escape "$imei_editable")",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
-EOF
+EOF_JSON
 }
 
-# Background loop mode: continuously update status
-if [ "$1" = "daemon" ] || [ -z "$1" ]; then
-	# If called with 'daemon' or no args, run continuously
-	if [ "$1" = "daemon" ]; then
-		while true; do
-			main > "$STATUS_FILE" 2>/dev/null
-			sleep 60
-		done
-	else
-		# Single execution (for testing or manual calls)
-		main
-	fi
+if [ "$1" = "daemon" ]; then
+	while true; do
+		main > "$STATUS_FILE" 2>/dev/null || true
+		sleep 60
+	done
 else
-	# Argument provided: run specific function
-	case "$1" in
-		imei) get_imei ;;
-		apn) get_apn ;;
-		signal) get_signal_strength ;;
-		connection) get_connection_type ;;
-		status) get_data_status ;;
-		sim) get_sim_status ;;
-		*) main ;;
-	esac
+	main
 fi
