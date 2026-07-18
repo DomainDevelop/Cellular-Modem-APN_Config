@@ -35,45 +35,22 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
 
 ## Actions Artifact (Router-Installable Package Output)
 
-The **Build OpenWrt Package** workflow (`.github/workflows/build-openwrt-package.yml`)
-compiles this repo with the official OpenWrt SDK and uploads an artifact containing:
+The workflow builds with the OpenWrt SDK target profile and uploads:
 - installable `.ipk` package(s)
 - `SHA256SUMS`
-- `INSTALL.txt` (LuCI upload + `opkg` install instructions)
+- `INSTALL.txt` (manual USB install instructions)
 
-The build defaults to the XE-3000 class target: **OpenWrt 23.05.5, `mediatek/filogic`
-(`aarch64_cortex-a53`)**. Because the package is `PKGARCH:=all`, the resulting `.ipk`
-is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
+From **Actions** tab:
+1. Open a completed run of **Build OpenWrt Package**.
+2. Download artifact named like:
+   - `luci-app-ginet-cellmodem_23.05.5_xe3000_aarch64_cortex-a53`
+3. Extract the artifact, copy the `.ipk` to USB storage, then install on router:
 
-### Get the package from the Actions tab
-
-1. Open a completed run of **Build OpenWrt Package** (triggered by push, PR, or a
-   manual **Run workflow**).
-2. Download the artifact named like:
-   - `openwrt-ipk-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk`
-3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
-   `INSTALL.txt`.
-
-### Install offline on the router
-
-**Option A — LuCI web upload (no SSH needed):**
-1. Log in to LuCI as admin.
-2. Go to **System → Software**.
-3. Click **Upload Package...**, choose the `.ipk`, and confirm.
-
-**Option B — `opkg` over SSH / USB:**
 ```sh
-# copy the .ipk to the router (scp or USB), then:
-opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
-# if dependencies are missing and the router has internet:
-opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
+opkg install /path/to/luci-app-ginet-cellmodem_*.ipk
 ```
 
-Optionally verify integrity first with `sha256sum -c SHA256SUMS`.
-
-The workflow also validates the generated `.ipk` format (`debian-binary`,
-`control.tar.*`, `data.tar.*`) before upload, so the downloaded artifact matches
-router package requirements.
+The workflow now also validates the generated `.ipk` format (`debian-binary`, `control.tar.*`, `data.tar.*`) before upload, so the downloaded artifact matches router package requirements.
 
 ## Local Build (OpenWrt SDK)
 
