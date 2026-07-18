@@ -48,6 +48,9 @@ define Package/luci-app-ginet-cellmodem/install
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/ginet_modem.lua $(1)/usr/lib/lua/luci/controller/ginet_modem.lua
 endef
 
+define Build/Compile
+endef
+
 define Package/luci-app-ginet-cellmodem/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
