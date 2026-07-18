@@ -8,7 +8,7 @@ if not json_available then
 	json_available, json = pcall(require, "cjson")
 end
 
-local function split_csv(value)
+local function parse_csv_list(value)
 	local items = {}
 	for item in (value or ""):gmatch("[^,]+") do
 		item = item:gsub("^%s+", ""):gsub("%s+$", "")
@@ -29,6 +29,23 @@ local function mode_label(mode)
 		["1g"] = translate("1G")
 	}
 	return labels[mode] or mode:upper()
+end
+
+local function validate_integer_range(value, minimum, maximum, empty_allowed)
+	if not value or value == "" then
+		return empty_allowed and value or nil
+	end
+
+	if not value:match("^%d+$") then
+		return nil
+	end
+
+	local numeric_value = tonumber(value)
+	if numeric_value and numeric_value >= minimum and numeric_value <= maximum then
+		return tostring(numeric_value)
+	end
+
+	return nil
 end
 
 local function get_uci(section, option, default)
@@ -143,7 +160,7 @@ end
 ensure_defaults()
 local modem_status = read_modem_status()
 local active_slot = modem_status.active_slot == "sim2" and "sim2" or "sim1"
-local supported_modes = split_csv(modem_status.supported_network_modes or "auto")
+local supported_modes = parse_csv_list(modem_status.supported_network_modes or "auto")
 if #supported_modes == 0 then
 	supported_modes = { "auto" }
 end
@@ -226,12 +243,9 @@ local ttl = cellular:option(Value, "ttl", translate("TTL"),
 ttl.placeholder = "64"
 ttl.rmempty = true
 function ttl.validate(self, value)
-	if not value or value == "" then
-		return value
-	end
-	local ttl_num = tonumber(value)
-	if ttl_num and ttl_num >= 1 and ttl_num <= 255 and value:match("^%d+$") then
-		return tostring(ttl_num)
+	local validated = validate_integer_range(value, 1, 255, true)
+	if validated ~= nil then
+		return validated
 	end
 	return nil, translate("TTL must be a whole number between 1 and 255.")
 end
@@ -256,7 +270,7 @@ function apn_info.sectiontitle(self, section)
 	return string.format("%s (%s)", label, state)
 end
 
-local function add_mode_choices(option)
+local function add_network_mode_choices(option)
 	for _, mode in ipairs(supported_modes) do
 		option:value(mode, mode_label(mode))
 	end
@@ -289,12 +303,9 @@ proxy.rmempty = true
 local port = apn_info:option(Value, "port", translate("Port"))
 port.rmempty = true
 function port.validate(self, value)
-	if not value or value == "" then
-		return value
-	end
-	local port_num = tonumber(value)
-	if port_num and port_num >= 1 and port_num <= 65535 and value:match("^%d+$") then
-		return tostring(port_num)
+	local validated = validate_integer_range(value, 1, 65535, true)
+	if validated ~= nil then
+		return validated
 	end
 	return nil, translate("Port must be between 1 and 65535.")
 end
@@ -332,7 +343,7 @@ roaming_protocol:value("ipv4v6", "IPv4 / IPv6")
 roaming_protocol.default = "ipv4v6"
 
 local network_type = apn_info:option(ListValue, "network_type", translate("Network Type"))
-add_mode_choices(network_type)
+add_network_mode_choices(network_type)
 network_type.default = "auto"
 
 function m.on_after_commit(self)

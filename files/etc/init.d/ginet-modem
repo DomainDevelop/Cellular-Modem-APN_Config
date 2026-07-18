@@ -45,6 +45,7 @@ start_service() {
 	ensure_defaults
 
 	procd_open_instance "ginet-modem"
+	# "daemon" keeps the status script in its polling loop so procd only tracks one long-lived worker.
 	procd_set_param command /bin/sh "$MODEM_SCRIPT" daemon
 	procd_set_param respawn 3600 5 -1
 	procd_set_param pidfile "$PID_FILE"
