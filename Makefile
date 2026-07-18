@@ -46,6 +46,10 @@ define Package/luci-app-ginet-cellmodem/install
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/ginet_modem.lua $(1)/usr/lib/lua/luci/controller/ginet_modem.lua
 endef
 
+# This package only installs pre-written files (Lua/shell/config); there is no
+# source to build. Override Build/Compile with a no-op so package.mk does not run
+# the default "make -C $(PKG_BUILD_DIR)" step, which fails with "No targets
+# specified and no makefile found".
 define Build/Compile
 endef
 

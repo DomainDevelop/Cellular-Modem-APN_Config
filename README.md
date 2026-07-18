@@ -37,21 +37,23 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
 
 The **Build OpenWrt Package** workflow (`.github/workflows/build-openwrt-package.yml`)
 compiles this repo with the official OpenWrt SDK and uploads an artifact containing:
-- installable `.ipk` package(s)
+- installable package(s) (`.ipk` on OpenWrt 24.10, `.apk` on OpenWrt 25.12)
 - `SHA256SUMS`
-- `INSTALL.txt` (LuCI upload + `opkg` install instructions)
+- `INSTALL.txt` (LuCI upload + `opkg`/`apk` install instructions)
 
-The build defaults to the XE-3000 class target: **OpenWrt 23.05.5, `mediatek/filogic`
-(`aarch64_cortex-a53`)**. Because the package is `PKGARCH:=all`, the resulting `.ipk`
-is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
+The build targets the XE-3000 class **`mediatek/filogic` (`aarch64_cortex-a53`)** on the
+newest supported OpenWrt releases: **24.10.7** (primary, `.ipk`) and **25.12.5** (`.apk`).
+Because the package is `PKGARCH:=all`, the resulting package is portable across
+`mediatek/filogic` devices of the same release that provide the listed dependencies.
 
 ### Get the package from the Actions tab
 
 1. Open a completed run of **Build OpenWrt Package** (triggered by push, PR, or a
    manual **Run workflow**).
 2. Download the artifact named like:
-   - `openwrt-ipk-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk`
-3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
+   - `openwrt-ipk-24.10.7-xe3000` (contains `luci-app-ginet-cellmodem_*.ipk`)
+   - `openwrt-apk-25.12.5-xe3000` (contains `luci-app-ginet-cellmodem-*.apk`)
+3. Extract it. You will get the package file, `SHA256SUMS`, and
    `INSTALL.txt`.
 
 ### Install offline on the router
@@ -61,25 +63,30 @@ is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
 2. Go to **System → Software**.
 3. Click **Upload Package...**, choose the `.ipk`, and confirm.
 
-**Option B — `opkg` over SSH / USB:**
+**Option B — `opkg` (24.10) or `apk` (25.12) over SSH / USB:**
 ```sh
-# copy the .ipk to the router (scp or USB), then:
+# copy the package to the router (scp or USB), then on OpenWrt 24.10:
 opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 # if dependencies are missing and the router has internet:
 opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
+
+# on OpenWrt 25.12 (apk):
+apk add --allow-untrusted /tmp/luci-app-ginet-cellmodem-*.apk
 ```
 
 Optionally verify integrity first with `sha256sum -c SHA256SUMS`.
 
-The workflow also validates the generated `.ipk` format (`debian-binary`,
-`control.tar.*`, `data.tar.*`) before upload, so the downloaded artifact matches
-router package requirements.
+The workflow also validates the generated package format before upload (`.ipk`:
+`debian-binary`, `control.tar.*`, `data.tar.*`; `.apk`: gzip integrity), so the
+downloaded artifact matches router package requirements.
 
 ## Local Build (OpenWrt SDK)
 
 ```sh
-# inside OpenWrt SDK root
-printf 'src-link custom /path/to/Cellular-Modem-APN_Config\n' > feeds.conf.default
+# inside OpenWrt SDK root: stage this repo as a package and build it
+mkdir -p package/luci-app-ginet-cellmodem
+rsync -a --exclude '.git' --exclude '.github' \
+  /path/to/Cellular-Modem-APN_Config/ package/luci-app-ginet-cellmodem/
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 make defconfig

@@ -1,16 +1,6 @@
 config modem 'settings'
 	option enabled '1'
 	option imei ''
-	option allow_imei_edit '1'
-	option imei_scope 'global'
-	option active_slot 'sim1'
-	option profile_to_edit 'sim1'
-	option network_mode 'auto'
-	option supported_network_modes 'auto,5g,4g,3g,2g'
-	option ttl ''
-
-config apn 'sim1'
-	option name 'SIM 1'
 	option apn 'internet'
 
 config vpn 'sim1'

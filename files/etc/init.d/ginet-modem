@@ -7,41 +7,11 @@ USE_PROCD=1
 MODEM_SCRIPT="/usr/bin/ginet-modem-status.sh"
 STATUS_FILE="/tmp/ginet_modem_status.json"
 
-ensure_defaults() {
-	uci -q get ginet_modem.settings >/dev/null 2>&1 || uci set ginet_modem.settings='modem'
-	uci -q get ginet_modem.sim1 >/dev/null 2>&1 || uci set ginet_modem.sim1='apn'
-	uci -q get ginet_modem.sim2 >/dev/null 2>&1 || uci set ginet_modem.sim2='apn'
-
-	uci -q get ginet_modem.settings.enabled >/dev/null 2>&1 || uci set ginet_modem.settings.enabled='1'
-	uci -q get ginet_modem.settings.allow_imei_edit >/dev/null 2>&1 || uci set ginet_modem.settings.allow_imei_edit='1'
-	uci -q get ginet_modem.settings.imei_scope >/dev/null 2>&1 || uci set ginet_modem.settings.imei_scope='global'
-	uci -q get ginet_modem.settings.active_slot >/dev/null 2>&1 || uci set ginet_modem.settings.active_slot='sim1'
-	uci -q get ginet_modem.settings.profile_to_edit >/dev/null 2>&1 || uci set ginet_modem.settings.profile_to_edit='sim1'
-	uci -q get ginet_modem.settings.network_mode >/dev/null 2>&1 || uci set ginet_modem.settings.network_mode='auto'
-	uci -q get ginet_modem.settings.supported_network_modes >/dev/null 2>&1 || uci set ginet_modem.settings.supported_network_modes='auto,5g,4g,3g,2g'
-
-	uci -q get ginet_modem.sim1.name >/dev/null 2>&1 || uci set ginet_modem.sim1.name='SIM 1'
-	uci -q get ginet_modem.sim1.apn >/dev/null 2>&1 || uci set ginet_modem.sim1.apn='internet'
-	uci -q get ginet_modem.sim1.apn_protocol >/dev/null 2>&1 || uci set ginet_modem.sim1.apn_protocol='ipv4v6'
-	uci -q get ginet_modem.sim1.apn_roaming_protocol >/dev/null 2>&1 || uci set ginet_modem.sim1.apn_roaming_protocol='ipv4v6'
-	uci -q get ginet_modem.sim1.network_type >/dev/null 2>&1 || uci set ginet_modem.sim1.network_type='auto'
-
-	uci -q get ginet_modem.sim2.name >/dev/null 2>&1 || uci set ginet_modem.sim2.name='SIM 2'
-	uci -q get ginet_modem.sim2.apn >/dev/null 2>&1 || uci set ginet_modem.sim2.apn='internet'
-	uci -q get ginet_modem.sim2.apn_protocol >/dev/null 2>&1 || uci set ginet_modem.sim2.apn_protocol='ipv4v6'
-	uci -q get ginet_modem.sim2.apn_roaming_protocol >/dev/null 2>&1 || uci set ginet_modem.sim2.apn_roaming_protocol='ipv4v6'
-	uci -q get ginet_modem.sim2.network_type >/dev/null 2>&1 || uci set ginet_modem.sim2.network_type='auto'
-
-	uci commit ginet_modem
-}
-
 service_triggers() {
 	procd_add_reload_trigger "ginet_modem"
 }
 
 start_service() {
-	ensure_defaults
-
 	procd_open_instance "ginet-modem"
 	procd_set_param command "$MODEM_SCRIPT" daemon
 	procd_set_param respawn 3600 5 -1

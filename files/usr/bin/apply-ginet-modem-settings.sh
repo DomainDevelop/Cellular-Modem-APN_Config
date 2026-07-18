@@ -26,8 +26,6 @@ apply_apn_qmi() {
 			log_msg "QMI APN application failed; continuing with UCI network config"
 		fi
 	fi
-
-	log_msg "No supported firewall tooling found for TTL application"
 }
 
 apply_apn_network_config() {

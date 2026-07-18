@@ -7,7 +7,7 @@ set -eu
 
 DEVICE_QMI="/dev/cdc-wdm0"
 DEVICE_SERIAL="/dev/ttyUSB0"
-CONFIG_NAME="ginet_modem"
+CONFIG_FILE="/etc/config/ginet_modem"
 STATUS_FILE="/tmp/ginet_modem_status.json"
 
 json_escape() {
@@ -15,9 +15,9 @@ json_escape() {
 }
 
 detect_modem_device() {
-	if [ -c "$DEVICE_QMI" ]; then
+	if [ -e "$DEVICE_QMI" ]; then
 		echo "$DEVICE_QMI"
-	elif [ -c "$DEVICE_SERIAL" ]; then
+	elif [ -e "$DEVICE_SERIAL" ]; then
 		echo "$DEVICE_SERIAL"
 	else
 		echo ""
@@ -146,16 +146,9 @@ EOFJSON
   "apn": "$apn",
   "signal": "$signal",
   "signal_unit": "dBm",
-  "connection_type": "$(json_escape "$connection")",
-  "data_status": "$(json_escape "$data_status")",
-  "sim_status": "$(json_escape "$sim_status")",
-  "sim_inserted": "$(json_escape "$sim_inserted")",
-  "active_slot": "$(json_escape "$active_slot")",
-  "active_profile": "$(json_escape "$active_profile")",
-  "preferred_network_mode": "$(json_escape "$preferred_mode")",
-  "supported_network_modes": "$(json_escape "$supported_modes")",
-  "imei_scope": "$(json_escape "$imei_scope")",
-  "imei_editable": "$(json_escape "$imei_editable")",
+  "connection_type": "$connection",
+  "data_status": "$data_status",
+  "sim_status": "$sim_status",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOFJSON
