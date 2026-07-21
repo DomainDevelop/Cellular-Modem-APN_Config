@@ -23,6 +23,9 @@ define Package/luci-app-ginet-cellmodem/description
   and an admin-only controlled terminal for OpenWrt 24/25 and XE-3000 class targets.
 endef
 
+define Build/Compile
+endef
+
 define Package/luci-app-ginet-cellmodem/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/ginet_modem $(1)/etc/config/ginet_modem
