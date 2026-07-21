@@ -19,13 +19,13 @@ env:
   # For example: Luci-App-Adguardhome, V2ray-Core, KMOD-Wireguard, etc.
   # 1. 设置你要编译的软件包名称 (必须与你的软件包目录名相同)
   #    例如: luci-app-adguardhome, v2ray-core, kmod-wireguard 等
-  PACKAGE_NAME: my-cool-package
+  PACKAGE_NAME: luci-app-ginet-cellmodem
 
   # 2. Set the version of OpenWrt to compile (it must be the official release label, such as' v23.05.3').
   # Note: this method does not support' master' or' openwrt-23.05' and other branch names.
   # 2. 设置要编译的 OpenWrt 版本 (必须是官方的正式发布版标签, 例如 'v23.05.3')
   #    注意：此方法不支持 'master' 或 'openwrt-23.05' 等分支名
-  OPENWRT_VERSION: 'v23.05.3'
+  OPENWRT_VERSION: 'v23.05.5'
 
   # 3. Specify the SDK save directory, generally without modification.
   # 3. 指定SDK保存目录，一般不用修改
