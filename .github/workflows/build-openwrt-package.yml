@@ -124,10 +124,10 @@ jobs:
             echo "Found package: $f"
             cp "$f" artifacts/
           done
-          ( cd artifacts && shopt -s nullglob && { test -n "$(echo *.ipk *.apk)" && sha256sum *.ipk *.apk > SHA256SUMS || true; } )
+          ( cd artifacts && shopt -s nullglob && files=(*.ipk *.apk) && [ ${#files[@]} -gt 0 ] && sha256sum "${files[@]}" > SHA256SUMS )
           # Primary package file name (used for the artifact name).
-          PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls ${{ steps.pkg.outputs.pkg_name }}_*.apk ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
-          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls *.apk *.ipk 2>/dev/null | head -n1)"
+          PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && files=(${{ steps.pkg.outputs.pkg_name }}_*.apk ${{ steps.pkg.outputs.pkg_name }}_*.ipk); [ ${#files[@]} -gt 0 ] && echo "${files[0]}" || true)"
+          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && files=(*.apk *.ipk); [ ${#files[@]} -gt 0 ] && echo "${files[0]}" || true)"
           test -n "$PRIMARY_PKG" || { echo "::error::No primary package found"; exit 1; }
           echo "primary_pkg=$PRIMARY_PKG" >> "$GITHUB_OUTPUT"
           cat > artifacts/INSTALL.txt <<EOF
