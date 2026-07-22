@@ -23,10 +23,8 @@ env:
 
   # 2. Set the version of OpenWrt to compile (it must be the official release label, such as' v23.05.3').
   # Note: this method does not support' master' or' openwrt-23.05' and other branch names.
-  # 2. 设置要编译的 OpenWrt 版本 (必须是官方的正式发布版标签, 例如 'v23.05.3')
-  #    注意：此方法不支持 'master' 或 'openwrt-23.05' 等分支名
-  OPENWRT_VERSION: 'v23.05.5'
-
+  # This has been moved to the matrix to support multiple versions (e.g. v23.05.5 for ipk, v24.10.3 for apk)
+  
   # 3. Specify the SDK save directory, generally without modification.
   # 3. 指定SDK保存目录，一般不用修改
   SDK_DIR: /home/runner/work/openwrt-sdk
@@ -44,9 +42,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        openwrt_version: ['v23.05.5', 'v24.10.3']
         target:
-          # The compiled path is found here in https://downloads.openwrt.org/releases/24.10.3/targets, and the name is anything.
-          # 编译的path在https://downloads.openwrt.org/releases/24.10.3/targets 这里查找，name随意
           - name: x86_64
             path: x86/64
           - name: mediatek_filogic
@@ -74,7 +71,7 @@ jobs:
           # 需要缓存的目录路径
           path: ${{ env.SDK_DIR }}
           # 缓存键：结合操作系统、目标架构和 OpenWrt 版本，确保环境变化时缓存失效
-          key: ${{ runner.os }}-sdk-${{ matrix.target.name }}-${{ env.OPENWRT_VERSION }}
+          key: ${{ runner.os }}-sdk-${{ matrix.target.name }}-${{ matrix.openwrt_version }}
 
       # 步骤 4: 准备 SDK (仅在缓存未命中时运行)
       # 这个组合步骤包含了下载、解压 SDK 和更新 feeds，因为这些都是 SDK 准备过程的一部分，应该一起被缓存。
@@ -82,7 +79,8 @@ jobs:
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           # 从环境变量中移除 'v' 前缀以匹配版本号
-          release_version="${OPENWRT_VERSION#v}"
+          release_version="${{ matrix.openwrt_version }}"
+          release_version="${release_version#v}"
           sdk_url_prefix="https://downloads.openwrt.org/releases/${release_version}/targets/${{ matrix.target.path }}"
           
           # 查找 SDK 文件名
@@ -255,7 +253,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: ${{ env.PACKAGE_NAME }}-${{ matrix.target.name }}
+          name: ${{ env.PACKAGE_NAME }}-${{ matrix.target.name }}-${{ matrix.openwrt_version }}
           path: ${{ env.SDK_DIR }}/${{ steps.collect_artifacts.outputs.path }}
           if-no-files-found: error
 
