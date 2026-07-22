@@ -75,7 +75,7 @@ jobs:
         run: |
           set -euxo pipefail
           PKG_MAKEFILE="$(grep -rlE '^\s*\$\(eval \$\(call BuildPackage' package-src --include=Makefile | head -n1)"
-          test -n "$PKG_MAKEFILE" || { echo "::error::Could not find an OpenWrt package Makefile"; exit 1; }
+          test -n "$PKG_MAKEFILE" || { echo "::error::Could not find an OpenWrt package Makefile (BuildPackage)"; exit 1; }
           PKG_DIR="$(dirname "$PKG_MAKEFILE")"
           PKG_NAME="$(sed -n 's/^PKG_NAME:=\s*//p' "$PKG_MAKEFILE" | head -n1)"
           test -n "$PKG_NAME" || { echo "::error::PKG_NAME not found in $PKG_MAKEFILE"; exit 1; }
