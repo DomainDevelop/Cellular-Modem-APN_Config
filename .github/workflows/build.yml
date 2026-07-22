@@ -25,7 +25,7 @@ env:
   # Note: this method does not support' master' or' openwrt-23.05' and other branch names.
   # 2. 设置要编译的 OpenWrt 版本 (必须是官方的正式发布版标签, 例如 'v23.05.3')
   #    注意：此方法不支持 'master' 或 'openwrt-23.05' 等分支名
-  OPENWRT_VERSION: 'v23.05.5'
+  OPENWRT_VERSION: 'v25.12.5'
 
   # 3. Specify the SDK save directory, generally without modification.
   # 3. 指定SDK保存目录，一般不用修改
@@ -249,6 +249,31 @@ jobs:
           echo "Found packages:"
           ls -l upload/
           
+          cat << 'EOF' > upload/INSTALL.txt
+Offline install of the package on an OpenWrt router
+=====================================================
+
+Option A - LuCI web upload (no SSH required):
+  1. Log in to LuCI (the router web UI) as admin.
+  2. Go to System -> Software.
+  3. Click "Upload Package..." and select the .apk or .ipk file from this artifact.
+  4. Confirm the install. Refresh LuCI; the new menu entry appears afterwards.
+
+  NOTE: If you see an "UNTRUSTED signature" error, you MUST use Option B (SSH) 
+  because LuCI does not allow bypassing signature checks for third-party packages.
+
+Option B - SSH / Command Line (Recommended for third-party packages):
+  1. Copy the .apk (or .ipk) to the router via scp or WinSCP to /tmp.
+     (If you already tried uploading via LuCI and it failed, the file is likely 
+      already at /tmp/upload.apk)
+  2. SSH into the router.
+  3. Install the package while allowing untrusted signatures:
+     For OpenWrt 24.x/25.x (using apk):
+       apk add --allow-untrusted /tmp/upload.apk
+     For older OpenWrt (using opkg):
+       opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
+EOF
+
           echo "path=upload" >> $GITHUB_OUTPUT
 
       # 步骤 9: 上传构建产物
