@@ -1,8 +1,6 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-ginet-cellmodem
-PKG_VERSION:=0.2.0
-PKG_RELEASE:=1
 
 PKG_MAINTAINER:=DomainDevelop
 PKG_LICENSE:=GPL-2.0-or-later
