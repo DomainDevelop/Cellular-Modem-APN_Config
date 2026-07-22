@@ -145,13 +145,13 @@ Option A - LuCI web upload (no SSH required):
 Option B - SSH / Command Line (Recommended for third-party packages):
   1. Copy the .apk (or .ipk) to the router via scp or WinSCP to /tmp.
      (If you already tried uploading via LuCI and it failed, the file is likely 
-      already at /tmp/upload.apk)
+      already at /tmp/upload.apk or /tmp/upload.ipk)
   2. SSH into the router.
   3. Install the package while allowing untrusted signatures:
      For OpenWrt 24.x/25.x (using apk):
-       apk add --allow-untrusted /tmp/upload.apk
+       apk add --allow-untrusted /tmp/upload.apk (or the exact .apk filename)
      For older OpenWrt (using opkg):
-       opkg install /tmp/$PRIMARY_PKG
+       opkg install /tmp/$PRIMARY_PKG (or the exact .ipk filename)
 
 Verify integrity before installing (optional):
   sha256sum -c SHA256SUMS
@@ -162,6 +162,17 @@ EOF
           set -euo pipefail
           PKG_FILE="artifacts/${{ steps.collect.outputs.primary_pkg }}"
           test -f "$PKG_FILE" || { echo "::error::Expected package not found: $PKG_FILE"; exit 1; }
+          
+          if [[ "$PKG_FILE" == *.ipk ]]; then
+            command -v ar >/dev/null 2>&1 || { echo "::error::'ar' tool is required to validate .ipk archive format"; exit 1; }
+            AR_ENTRIES="$(ar t "$PKG_FILE")"
+            printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "::error::Missing debian-binary in package"; exit 1; }
+            printf '%s\n' "$AR_ENTRIES" | grep -Eq "^control\.tar" || { echo "::error::Missing control.tar.* in package"; exit 1; }
+            printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.* in package"; exit 1; }
+          elif [[ "$PKG_FILE" == *.apk ]]; then
+            command -v tar >/dev/null 2>&1 || { echo "::error::'tar' tool is required to validate .apk archive format"; exit 1; }
+            tar -tf "$PKG_FILE" > /dev/null || { echo "::error::Invalid .apk package (not a valid tar archive)"; exit 1; }
+          fi
           echo "Package format OK: $PKG_FILE"
 
       - name: Upload package artifact
