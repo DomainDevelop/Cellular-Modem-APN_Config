@@ -42,7 +42,7 @@ There are now two dedicated SDK workflows:
 Each workflow uploads only its package format plus `SHA256SUMS`.
 
 The IPK build targets XE-3000 class firmware on **OpenWrt 23.05.5** (`mediatek/filogic`).
-The APK build targets XE-3000 class firmware on **OpenWrt 24.10.0** (`mediatek/filogic`).
+The APK build targets XE-3000 class firmware on **OpenWrt 25.12.5** (`mediatek/filogic`).
 
 ### Get the package from the Actions tab
 

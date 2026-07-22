@@ -22,11 +22,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target_name: xe3000-24.10
-            openwrt_version: "24.10.0"
+          - target_name: xe3000-25.12
+            openwrt_version: "25.12.5"
             target: "mediatek"
             subtarget: "filogic"
-            sdk_toolchain: "gcc-13.3.0_musl"
+            sdk_toolchain: "gcc-14.3.0_musl"
 
     steps:
       - name: Checkout package source
@@ -55,21 +55,30 @@ jobs:
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          rm -rf openwrt-sdk sdk.tar.xz
+          rm -rf openwrt-sdk sdk.tar
           BASE_URL="https://downloads.openwrt.org/releases/${{ matrix.openwrt_version }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}"
+          # Download sha256sums to discover the exact SDK filename.
+          # OpenWrt <=23.05.x uses .tar.xz; 24.10.x+ switched to .tar.zst.
+          SDK_FILE=""
           wget --tries=3 --timeout=30 -O sha256sums "$BASE_URL/sha256sums" || true
           if [ -s sha256sums ]; then
-            SDK_FILE="$(grep -oE "openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_[^[:space:]]+\.Linux-x86_64\.tar\.xz" sha256sums | head -n1 || true)"
+            SDK_FILE="$(grep -oE "openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_[^[:space:]]+\.Linux-x86_64\.tar\.(xz|zst)" sha256sums | head -n1 || true)"
+            if [ -z "${SDK_FILE:-}" ]; then
+              echo "::warning::No SDK entry matched in sha256sums. SDK-like entries present:"
+              grep -oE "openwrt-sdk[^[:space:]]+" sha256sums | head -n10 || true
+            fi
           fi
+          # Fallback: prefer .tar.zst (24.10+); .tar.xz for older releases.
           if [ -z "${SDK_FILE:-}" ]; then
-            SDK_FILE="openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_${{ matrix.sdk_toolchain }}.Linux-x86_64.tar.xz"
+            SDK_FILE="openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_${{ matrix.sdk_toolchain }}.Linux-x86_64.tar.zst"
           fi
           SDK_URL="$BASE_URL/$SDK_FILE"
-          wget --tries=3 --timeout=300 -O sdk.tar.xz "$SDK_URL"
-          test -s sdk.tar.xz
+          echo "Downloading SDK: $SDK_URL"
+          wget --tries=3 --timeout=300 -O sdk.tar "$SDK_URL"
+          test -s sdk.tar
           mkdir -p openwrt-sdk
-          tar -xf sdk.tar.xz -C openwrt-sdk --strip-components=1
-          rm -f sdk.tar.xz
+          tar -xf sdk.tar -C openwrt-sdk --strip-components=1
+          rm -f sdk.tar sha256sums
 
       - name: Detect package directory and name
         id: pkg
@@ -97,6 +106,13 @@ jobs:
         working-directory: openwrt-sdk
         run: |
           set -euxo pipefail
+          # Rewrite feeds to use GitHub mirrors; git.openwrt.org is unreliable
+          # from GitHub Actions runners and causes intermittent feed update failures.
+          sed -i \
+            -e 's|git\.openwrt\.org/feed|github.com/openwrt|g' \
+            -e 's|git\.openwrt\.org/project|github.com/openwrt|g' \
+            -e 's|git\.openwrt\.org/openwrt|github.com/openwrt|g' \
+            feeds.conf.default || true
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
