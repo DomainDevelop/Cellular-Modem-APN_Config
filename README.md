@@ -35,24 +35,23 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
 
 ## Actions Artifact (Router-Installable Package Output)
 
-The **Build OpenWrt Package** workflow (`.github/workflows/build-openwrt-package.yml`)
-compiles this repo with the official OpenWrt SDK and uploads an artifact containing:
-- installable `.ipk` package(s)
-- `SHA256SUMS`
-- `INSTALL.txt` (LuCI upload + `opkg` install instructions)
+There are now two dedicated SDK workflows:
+- **Build OpenWrt Package SDK (IPK)** (`.github/workflows/build-openwrt-package.yml`)
+- **Build OpenWrt Package SDK (APK)** (`.github/workflows/build-openwrt-package-apk.yml`)
 
-The build defaults to the XE-3000 class target: **OpenWrt 23.05.5, `mediatek/filogic`
-(`aarch64_cortex-a53`)**. Because the package is `PKGARCH:=all`, the resulting `.ipk`
-is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
+Each workflow uploads only its package format plus `SHA256SUMS`.
+
+The IPK build targets XE-3000 class firmware on **OpenWrt 23.05.5** (`mediatek/filogic`).
+The APK build targets XE-3000 class firmware on **OpenWrt 24.10.0** (`mediatek/filogic`).
 
 ### Get the package from the Actions tab
 
-1. Open a completed run of **Build OpenWrt Package** (triggered by push, PR, or a
+1. Open a completed run of either workflow (triggered by push, PR, or a
    manual **Run workflow**).
 2. Download the artifact named like:
-   - `openwrt-ipk-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk`
-3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
-   `INSTALL.txt`.
+   - `openwrt-ipk-luci-app-ginet-cellmodem_*.ipk` from the IPK workflow
+   - `openwrt-apk-luci-app-ginet-cellmodem_*.apk` from the APK workflow
+3. Extract it. You will get package file(s) and `SHA256SUMS`.
 
 ### Install offline on the router
 

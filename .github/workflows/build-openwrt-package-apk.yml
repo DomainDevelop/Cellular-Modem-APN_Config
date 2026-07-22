@@ -1,4 +1,4 @@
-name: Build OpenWrt Package SDK (IPK)
+name: Build OpenWrt Package SDK (APK)
 
 on:
   workflow_dispatch:
@@ -16,17 +16,17 @@ permissions:
 
 jobs:
   build:
-    name: build-ipk (${{ matrix.target_name }})
+    name: build-apk (${{ matrix.target_name }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target_name: xe3000
-            openwrt_version: "23.05.5"
+          - target_name: xe3000-24.10
+            openwrt_version: "24.10.0"
             target: "mediatek"
             subtarget: "filogic"
-            sdk_toolchain: "gcc-12.3.0_musl"
+            sdk_toolchain: "gcc-13.3.0_musl"
 
     steps:
       - name: Checkout package source
@@ -41,14 +41,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses-dev libssl-dev python3-setuptools rsync swig \
-            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates binutils
+            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates tar
 
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v5
         with:
           path: openwrt-sdk
-          key: sdk-ipk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}-${{ matrix.sdk_toolchain }}
+          key: sdk-apk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}-${{ matrix.sdk_toolchain }}
 
       - name: Download and extract OpenWrt SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -99,7 +99,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Prepare build config (IPK)
+      - name: Prepare build config (APK)
         working-directory: openwrt-sdk
         run: |
           set -euxo pipefail
@@ -109,16 +109,19 @@ jobs:
             echo "CONFIG_PACKAGE_${PKG_NAME}=m"
             echo "CONFIG_PACKAGE_luci-i18n-${translation_pkg}-zh-cn=m"
             echo "CONFIG_LUCI_LANG_zh_Hans=y"
+            echo "CONFIG_USE_APK=y"
+            echo "CONFIG_USE_OPKG=n"
           } > .config
           make defconfig
+          grep -q '^CONFIG_USE_APK=y' .config || { echo "::error::This SDK does not support CONFIG_USE_APK=y"; exit 1; }
 
-      - name: Compile package (IPK)
+      - name: Compile package (APK)
         working-directory: openwrt-sdk
         run: |
           set -euxo pipefail
           make "package/${{ steps.pkg.outputs.pkg_name }}/compile" -j1 V=s
 
-      - name: Collect artifacts (IPK only)
+      - name: Collect artifacts (APK only)
         id: collect
         working-directory: openwrt-sdk
         run: |
@@ -126,31 +129,28 @@ jobs:
           PKG_NAME="${{ steps.pkg.outputs.pkg_name }}"
           translation_pkg="${PKG_NAME#luci-app-}"
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
-          mapfile -t PKGS < <(find ./bin/packages -type f \( -name "${PKG_NAME}*.ipk" -o -name "luci-i18n-${translation_pkg}-*.ipk" \))
-          test "${#PKGS[@]}" -gt 0 || { echo "::error::No .ipk packages were produced"; find ./bin/packages -type f | head -n 200; exit 1; }
+          mapfile -t PKGS < <(find ./bin/packages -type f \( -name "${PKG_NAME}*.apk" -o -name "luci-i18n-${translation_pkg}-*.apk" \))
+          test "${#PKGS[@]}" -gt 0 || { echo "::error::No .apk packages were produced"; find ./bin/packages -type f | head -n 200; exit 1; }
           for f in "${PKGS[@]}"; do
             cp "$f" "$GITHUB_WORKSPACE/artifacts/"
           done
-          ( cd "$GITHUB_WORKSPACE/artifacts" && sha256sum *.ipk > SHA256SUMS )
-          PRIMARY_PKG="$(find "$GITHUB_WORKSPACE/artifacts" -type f -name "${PKG_NAME}_*.ipk" -exec basename {} \; | head -n1)"
-          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(find "$GITHUB_WORKSPACE/artifacts" -type f -name "*.ipk" -exec basename {} \; | head -n1)"
+          ( cd "$GITHUB_WORKSPACE/artifacts" && sha256sum *.apk > SHA256SUMS )
+          PRIMARY_PKG="$(find "$GITHUB_WORKSPACE/artifacts" -type f -name "${PKG_NAME}_*.apk" -exec basename {} \; | head -n1)"
+          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(find "$GITHUB_WORKSPACE/artifacts" -type f -name "*.apk" -exec basename {} \; | head -n1)"
           echo "primary_pkg=$PRIMARY_PKG" >> "$GITHUB_OUTPUT"
 
-      - name: Validate generated package format (IPK)
+      - name: Validate generated package format (APK)
         run: |
           set -euo pipefail
           PKG_FILE="artifacts/${{ steps.collect.outputs.primary_pkg }}"
           test -f "$PKG_FILE" || { echo "::error::Expected package not found: $PKG_FILE"; exit 1; }
-          AR_ENTRIES="$(ar t "$PKG_FILE")"
-          printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "::error::Missing debian-binary"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^control\.tar" || { echo "::error::Missing control.tar.*"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.*"; exit 1; }
+          tar -tf "$PKG_FILE" | grep -q '^.PKGINFO$' || { echo "::error::Missing .PKGINFO in APK package"; exit 1; }
 
-      - name: Upload package artifact (IPK)
+      - name: Upload package artifact (APK)
         uses: actions/upload-artifact@v5
         with:
-          name: openwrt-ipk-${{ steps.collect.outputs.primary_pkg }}
+          name: openwrt-apk-${{ steps.collect.outputs.primary_pkg }}
           path: |
-            artifacts/*.ipk
+            artifacts/*.apk
             artifacts/SHA256SUMS
           if-no-files-found: error
