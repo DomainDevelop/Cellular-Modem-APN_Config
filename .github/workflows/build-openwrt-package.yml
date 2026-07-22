@@ -124,7 +124,7 @@ jobs:
             echo "Found package: $f"
             cp "$f" artifacts/
           done
-          ( cd artifacts && shopt -s nullglob && { sha256sum *.ipk *.apk > SHA256SUMS 2>/dev/null || true; } )
+          ( cd artifacts && shopt -s nullglob && { test -n "$(echo *.ipk *.apk)" && sha256sum *.ipk *.apk > SHA256SUMS || true; } )
           # Primary package file name (used for the artifact name).
           PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls ${{ steps.pkg.outputs.pkg_name }}_*.apk ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
           test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls *.apk *.ipk 2>/dev/null | head -n1)"
