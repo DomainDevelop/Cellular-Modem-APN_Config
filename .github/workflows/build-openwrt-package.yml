@@ -124,10 +124,11 @@ jobs:
             echo "Found package: $f"
             cp "$f" artifacts/
           done
-          ( cd artifacts && shopt -s nullglob && sha256sum *.ipk *.apk > SHA256SUMS )
+          ( cd artifacts && shopt -s nullglob && { sha256sum *.ipk *.apk > SHA256SUMS 2>/dev/null || true; } )
           # Primary package file name (used for the artifact name).
           PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls ${{ steps.pkg.outputs.pkg_name }}_*.apk ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
           test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls *.apk *.ipk 2>/dev/null | head -n1)"
+          test -n "$PRIMARY_PKG" || { echo "::error::No primary package found"; exit 1; }
           echo "primary_pkg=$PRIMARY_PKG" >> "$GITHUB_OUTPUT"
           cat > artifacts/INSTALL.txt <<EOF
 Offline install of $PRIMARY_PKG on an OpenWrt router
@@ -181,7 +182,8 @@ EOF
         with:
           name: openwrt-pkg-${{ steps.collect.outputs.primary_pkg }}
           path: |
-            artifacts/*.*pk
+            artifacts/*.ipk
+            artifacts/*.apk
             artifacts/SHA256SUMS
             artifacts/INSTALL.txt
           if-no-files-found: error
