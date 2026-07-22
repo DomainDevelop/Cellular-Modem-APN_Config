@@ -25,7 +25,7 @@ jobs:
         include:
           # Default, XE-3000 class target (OpenWrt 23.05.5 mediatek/filogic).
           - target_name: xe3000
-            openwrt_version: "25.12.5"
+            openwrt_version: "23.05.5"
             target: "mediatek"
             subtarget: "filogic"
             pkg_arch: "aarch64_cortex-a53"
@@ -112,78 +112,62 @@ jobs:
           # Build only the target package; -j1 + V=s gives clear, fail-fast logs.
           make "package/${{ steps.pkg.outputs.pkg_name }}/compile" -j1 V=s
 
-      - name: Collect package artifacts
+      - name: Collect .ipk artifacts
         id: collect
         run: |
           set -euxo pipefail
           mkdir -p artifacts
-          # Gather every generated .ipk and .apk from the SDK output tree.
-          mapfile -t PKGS < <(find openwrt-sdk/bin -type f \( -name '*.ipk' -o -name '*.apk' \))
-          test "${#PKGS[@]}" -gt 0 || { echo "::error::No package files were produced by the build"; exit 1; }
-          for f in "${PKGS[@]}"; do
+          # Gather every generated .ipk from the SDK output tree.
+          mapfile -t IPKS < <(find openwrt-sdk/bin -type f -name '*.ipk')
+          test "${#IPKS[@]}" -gt 0 || { echo "::error::No .ipk files were produced by the build"; exit 1; }
+          for f in "${IPKS[@]}"; do
             echo "Found package: $f"
             cp "$f" artifacts/
           done
-          ( cd artifacts && shopt -s nullglob && files=(*.ipk *.apk) && [ ${#files[@]} -gt 0 ] && sha256sum "${files[@]}" > SHA256SUMS )
+          ( cd artifacts && sha256sum *.ipk > SHA256SUMS )
           # Primary package file name (used for the artifact name).
-          PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && files=(${{ steps.pkg.outputs.pkg_name }}_*.apk ${{ steps.pkg.outputs.pkg_name }}_*.ipk); [ ${#files[@]} -gt 0 ] && echo "${files[0]}" || true)"
-          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && files=(*.apk *.ipk); [ ${#files[@]} -gt 0 ] && echo "${files[0]}" || true)"
-          test -n "$PRIMARY_PKG" || { echo "::error::No primary package found"; exit 1; }
-          echo "primary_pkg=$PRIMARY_PKG" >> "$GITHUB_OUTPUT"
+          PRIMARY_IPK="$(cd artifacts && ls ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
+          test -n "$PRIMARY_IPK" || PRIMARY_IPK="$(cd artifacts && ls *.ipk | head -n1)"
+          echo "primary_ipk=$PRIMARY_IPK" >> "$GITHUB_OUTPUT"
           cat > artifacts/INSTALL.txt <<EOF
-Offline install of $PRIMARY_PKG on an OpenWrt router
-=====================================================
+          Offline install of $PRIMARY_IPK on an OpenWrt router
+          =====================================================
 
-Option A - LuCI web upload (no SSH required):
-  1. Log in to LuCI (the router web UI) as admin.
-  2. Go to System -> Software.
-  3. Click "Upload Package..." and select the .apk or .ipk file from this artifact.
-  4. Confirm the install. Refresh LuCI; the new menu entry appears afterwards.
+          Option A - LuCI web upload (no SSH required):
+            1. Log in to LuCI (the router web UI) as admin.
+            2. Go to System -> Software.
+            3. Click "Upload Package..." and select the .ipk file from this artifact.
+            4. Confirm the install. Refresh LuCI; the new menu entry appears afterwards.
 
-  NOTE: If you see an "UNTRUSTED signature" error, you MUST use Option B (SSH) 
-  because LuCI does not allow bypassing signature checks for third-party packages.
+          Option B - opkg over SSH / USB:
+            1. Copy the .ipk to the router (scp or USB storage), e.g. to /tmp.
+            2. Install it:
+                 opkg install /tmp/$PRIMARY_IPK
+            3. If dependencies are missing and the router has internet:
+                 opkg update && opkg install /tmp/$PRIMARY_IPK
 
-Option B - SSH / Command Line (Recommended for third-party packages):
-  1. Copy the .apk (or .ipk) to the router via scp or WinSCP to /tmp.
-     (If you already tried uploading via LuCI and it failed, the file is likely 
-      already at /tmp/upload.apk or /tmp/upload.ipk)
-  2. SSH into the router.
-  3. Install the package while allowing untrusted signatures:
-     For OpenWrt 24.x/25.x (using apk):
-       apk add --allow-untrusted /tmp/upload.apk
-     For older OpenWrt (using opkg):
-       opkg install /tmp/upload.ipk
-     (Note: If you copied the file manually via scp, use your actual filename instead of upload.apk/ipk)
-
-Verify integrity before installing (optional):
-  sha256sum -c SHA256SUMS
-EOF
+          Verify integrity before installing (optional):
+            sha256sum -c SHA256SUMS
+          EOF
 
       - name: Validate generated package format
         run: |
           set -euo pipefail
-          PKG_FILE="artifacts/${{ steps.collect.outputs.primary_pkg }}"
-          test -f "$PKG_FILE" || { echo "::error::Expected package not found: $PKG_FILE"; exit 1; }
-          
-          if [[ "$PKG_FILE" == *.ipk ]]; then
-            command -v ar >/dev/null 2>&1 || { echo "::error::'ar' tool is required to validate .ipk archive format"; exit 1; }
-            AR_ENTRIES="$(ar t "$PKG_FILE")"
-            printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "::error::Missing debian-binary in package"; exit 1; }
-            printf '%s\n' "$AR_ENTRIES" | grep -Eq "^control\.tar" || { echo "::error::Missing control.tar.* in package"; exit 1; }
-            printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.* in package"; exit 1; }
-          elif [[ "$PKG_FILE" == *.apk ]]; then
-            command -v tar >/dev/null 2>&1 || { echo "::error::'tar' tool is required to validate .apk archive format"; exit 1; }
-            tar -tf "$PKG_FILE" > /dev/null || { echo "::error::Invalid .apk package (not a valid tar archive)"; exit 1; }
-          fi
-          echo "Package format OK: $PKG_FILE"
+          IPK_FILE="artifacts/${{ steps.collect.outputs.primary_ipk }}"
+          test -f "$IPK_FILE" || { echo "::error::Expected .ipk not found: $IPK_FILE"; exit 1; }
+          command -v ar >/dev/null 2>&1 || { echo "::error::'ar' tool is required to validate .ipk archive format"; exit 1; }
+          AR_ENTRIES="$(ar t "$IPK_FILE")"
+          printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "::error::Missing debian-binary in package"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^control\.tar" || { echo "::error::Missing control.tar.* in package"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.* in package"; exit 1; }
+          echo "Package format OK: $IPK_FILE"
 
-      - name: Upload package artifact
+      - name: Upload .ipk artifact
         uses: actions/upload-artifact@v5
         with:
-          name: openwrt-pkg-${{ steps.collect.outputs.primary_pkg }}
+          name: openwrt-ipk-${{ steps.collect.outputs.primary_ipk }}
           path: |
             artifacts/*.ipk
-            artifacts/*.apk
             artifacts/SHA256SUMS
             artifacts/INSTALL.txt
           if-no-files-found: error
