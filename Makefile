@@ -1,6 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-ginet-cellmodem
+# Note: PKG_VERSION and PKG_RELEASE are omitted here.
+# They are dynamically injected by the CI workflow (e.g. build.yml) during the build process.
 
 PKG_MAINTAINER:=DomainDevelop
 PKG_LICENSE:=GPL-2.0-or-later
