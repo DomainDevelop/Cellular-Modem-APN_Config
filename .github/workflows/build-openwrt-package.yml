@@ -31,7 +31,7 @@ jobs:
             pkg_arch: "aarch64_cortex-a53"
             sdk_toolchain: "gcc-12.3.0_musl"
           # OpenWrt 24.10.0 for apk package generation.
-          - target_name: xe3000-apk
+          - target_name: xe3000-24.10
             openwrt_version: "24.10.0"
             target: "mediatek"
             subtarget: "filogic"
@@ -69,7 +69,7 @@ jobs:
           wget --tries=3 --timeout=30 -O sha256sums "$BASE_URL/sha256sums" || true
           
           if [ -s sha256sums ]; then
-            SDK_FILE=$(grep -oE "openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_.*\.Linux-x86_64\.tar\.xz" sha256sums | head -n1 || true)
+            SDK_FILE=$(grep -oE "openwrt-sdk-${{ matrix.openwrt_version }}-${{ matrix.target }}-${{ matrix.subtarget }}_[^[:space:]]+\.Linux-x86_64\.tar\.xz" sha256sums | head -n1 || true)
           fi
           
           if [ -z "${SDK_FILE:-}" ]; then
@@ -144,8 +144,8 @@ jobs:
           done
           ( cd artifacts && sha256sum *.*pk > SHA256SUMS )
           # Primary package file name (used for the artifact name).
-          PRIMARY_PKG="$(cd artifacts && ls ${{ steps.pkg.outputs.pkg_name }}_*.*pk 2>/dev/null | head -n1)"
-          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && ls *.*pk | head -n1)"
+          PRIMARY_PKG="$(find artifacts -type f -name "${{ steps.pkg.outputs.pkg_name }}_*.*pk" -exec basename {} \; | head -n1)"
+          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(find artifacts -type f -name "*.*pk" -exec basename {} \; | head -n1)"
           echo "primary_pkg=$PRIMARY_PKG" >> "$GITHUB_OUTPUT"
           cat > artifacts/INSTALL.txt <<EOF
           Offline install of $PRIMARY_PKG on an OpenWrt router
