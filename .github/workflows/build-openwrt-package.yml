@@ -151,8 +151,8 @@ Option B - SSH / Command Line (Recommended for third-party packages):
      For OpenWrt 24.x/25.x (using apk):
        apk add --allow-untrusted /tmp/upload.apk
      For older OpenWrt (using opkg):
-       opkg install /tmp/$PRIMARY_PKG
-     (Note: If you copied the file manually via scp, use your actual filename instead of upload.apk)
+       opkg install /tmp/upload.ipk
+     (Note: If you copied the file manually via scp, use your actual filename instead of upload.apk/ipk)
 
 Verify integrity before installing (optional):
   sha256sum -c SHA256SUMS
