@@ -124,10 +124,10 @@ jobs:
             echo "Found package: $f"
             cp "$f" artifacts/
           done
-          ( cd artifacts && sha256sum *.*pk > SHA256SUMS )
+          ( cd artifacts && shopt -s nullglob && sha256sum *.ipk *.apk > SHA256SUMS )
           # Primary package file name (used for the artifact name).
-          PRIMARY_PKG="$(cd artifacts && ls ${{ steps.pkg.outputs.pkg_name }}_*.*pk 2>/dev/null | head -n1)"
-          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && ls *.*pk | head -n1)"
+          PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls ${{ steps.pkg.outputs.pkg_name }}_*.apk ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
+          test -n "$PRIMARY_PKG" || PRIMARY_PKG="$(cd artifacts && shopt -s nullglob && ls *.apk *.ipk 2>/dev/null | head -n1)"
           echo "primary_pkg=$PRIMARY_PKG" >> "$GITHUB_OUTPUT"
           cat > artifacts/INSTALL.txt <<EOF
 Offline install of $PRIMARY_PKG on an OpenWrt router
@@ -149,9 +149,10 @@ Option B - SSH / Command Line (Recommended for third-party packages):
   2. SSH into the router.
   3. Install the package while allowing untrusted signatures:
      For OpenWrt 24.x/25.x (using apk):
-       apk add --allow-untrusted /tmp/upload.apk (or the exact .apk filename)
+       apk add --allow-untrusted /tmp/upload.apk
      For older OpenWrt (using opkg):
-       opkg install /tmp/$PRIMARY_PKG (or the exact .ipk filename)
+       opkg install /tmp/$PRIMARY_PKG
+     (Note: If you copied the file manually via scp, use your actual filename instead of upload.apk)
 
 Verify integrity before installing (optional):
   sha256sum -c SHA256SUMS

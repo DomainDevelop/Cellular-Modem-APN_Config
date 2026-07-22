@@ -269,9 +269,10 @@ Option B - SSH / Command Line (Recommended for third-party packages):
   2. SSH into the router.
   3. Install the package while allowing untrusted signatures:
      For OpenWrt 24.x/25.x (using apk):
-       apk add --allow-untrusted /tmp/upload.apk (or the exact .apk filename)
+       apk add --allow-untrusted /tmp/upload.apk
      For older OpenWrt (using opkg):
-       opkg install /tmp/upload.ipk (or the exact .ipk filename)
+       opkg install /tmp/upload.ipk
+     (Note: If you copied the file manually via scp, use your actual filename instead of upload.apk/ipk)
 EOF
 
           echo "path=upload" >> $GITHUB_OUTPUT
