@@ -40,6 +40,8 @@ compiles this repo with the official OpenWrt SDK and uploads an artifact contain
 - installable `.ipk` package(s)
 - `SHA256SUMS`
 - `INSTALL.txt` (LuCI upload + `opkg` install instructions)
+- converted `.apk` package(s) generated from the built `.ipk` files
+- APK `SHA256SUMS`
 
 The build defaults to the XE-3000 class target: **OpenWrt 23.05.5, `mediatek/filogic`
 (`aarch64_cortex-a53`)**. Because the package is `PKGARCH:=all`, the resulting `.ipk`
@@ -51,8 +53,14 @@ is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
    manual **Run workflow**).
 2. Download the artifact named like:
    - `openwrt-ipk-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk`
+   - `apk-packages-xe3000`
 3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
    `INSTALL.txt`.
+4. For APK output, open `apk-packages-*` to get `*.apk` plus its `SHA256SUMS`.
+
+The APK artifact is produced by a post-build conversion step that runs only after
+successful IPK creation and validation. It uses the pinned converter fork
+`DomainDevelop/openwrt-ipk2apk` to convert each generated IPK into APK v2 format.
 
 ### Install offline on the router
 

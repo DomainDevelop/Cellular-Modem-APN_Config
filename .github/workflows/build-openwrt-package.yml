@@ -171,3 +171,40 @@ jobs:
             artifacts/SHA256SUMS
             artifacts/INSTALL.txt
           if-no-files-found: error
+
+      - name: Checkout IPK to APK converter
+        uses: actions/checkout@v5
+        with:
+          repository: DomainDevelop/openwrt-ipk2apk
+          ref: 60caa88a2c5907dc76884b58742304161d644480
+          path: converter-src
+
+      - name: Convert .ipk artifacts to .apk (v2)
+        run: |
+          set -euo pipefail
+          CONVERTER="$GITHUB_WORKSPACE/converter-src/openwrt-ipk2apk.py"
+          test -f "$CONVERTER" || { echo "::error::Converter script not found at $CONVERTER"; exit 1; }
+          mkdir -p apk-artifacts
+          shopt -s nullglob
+          IPK_FILES=(artifacts/*.ipk)
+          test "${#IPK_FILES[@]}" -gt 0 || { echo "::error::No .ipk files found for conversion in artifacts/"; exit 1; }
+          for ipk in "${IPK_FILES[@]}"; do
+            base_name="$(basename "$ipk" .ipk)"
+            apk_out="$GITHUB_WORKSPACE/apk-artifacts/${base_name}.apk"
+            echo "Converting '$ipk' -> '$apk_out'"
+            python3 "$CONVERTER" "$ipk" -o "$apk_out"
+            test -s "$apk_out" || { echo "::error::Conversion produced an empty or missing APK: $apk_out"; exit 1; }
+          done
+          mapfile -t APK_FILES < <(find apk-artifacts -type f -name '*.apk' -size +0c | sort)
+          test "${#APK_FILES[@]}" -gt 0 || { echo "::error::No non-empty .apk files were produced"; exit 1; }
+          printf '%s\n' "${APK_FILES[@]}"
+          ( cd apk-artifacts && sha256sum *.apk > SHA256SUMS )
+
+      - name: Upload .apk artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: apk-packages-${{ matrix.target_name }}
+          path: |
+            apk-artifacts/*.apk
+            apk-artifacts/SHA256SUMS
+          if-no-files-found: error
