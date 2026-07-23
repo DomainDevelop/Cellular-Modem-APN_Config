@@ -197,31 +197,37 @@ jobs:
           translation_pkg=${PACKAGE_NAME#luci-app-}
           find ./bin/packages -type f \( -name "${PACKAGE_NAME}*.ipk" -o -name "luci-i18n-${translation_pkg}-*.ipk" \) -exec cp {} output_ipk/ \;
 
-      # 步骤 7: 编译软件包 (APK)
-      - name: Compile the package (APK)
+      # 步骤 7: 检出 IPK 转 APK 转换器
+      - name: Checkout IPK to APK converter
+        uses: actions/checkout@v5
+        with:
+          repository: DomainDevelop/openwrt-ipk2apk
+          ref: 60caa88a2c5907dc76884b58742304161d644480
+          path: converter-src
+
+      # 步骤 7b: 将 IPK 转换为 APK (使用 openwrt-ipk2apk)
+      - name: Convert IPK packages to APK
         working-directory: ${{ env.SDK_DIR }}
         run: |
-          make package/${PACKAGE_NAME}/clean
-          
-          translation_pkg=${PACKAGE_NAME#luci-app-}
-          {
-            echo "CONFIG_PACKAGE_${PACKAGE_NAME}=m"
-            echo "CONFIG_PACKAGE_luci-i18n-${translation_pkg}-zh-cn=m"
-            echo "CONFIG_LUCI_LANG_zh_Hans=y"
-            echo "CONFIG_USE_APK=y"
-            echo "CONFIG_USE_OPKG=n"
-          } > .config
-          make defconfig
-          
-          if ! grep -q '^CONFIG_USE_APK=y' .config; then
-            echo "CONFIG_USE_APK not available in this SDK. Skipping APK build."
-            exit 0
-          fi
-
-          make package/${PACKAGE_NAME}/compile V=s -j$(($(nproc) + 1))
-          
+          set -euo pipefail
+          CONVERTER="${{ github.workspace }}/converter-src/openwrt-ipk2apk.py"
+          test -f "$CONVERTER" || { echo "::error::Converter script not found at $CONVERTER"; exit 1; }
           mkdir -p output_apk
-          find ./bin/packages -type f \( -name "${PACKAGE_NAME}*.apk" -o -name "luci-i18n-${translation_pkg}-*.apk" \) -exec cp {} output_apk/ \;
+          shopt -s nullglob
+          IPK_FILES=(output_ipk/*.ipk)
+          if [ "${#IPK_FILES[@]}" -eq 0 ]; then
+            echo "::warning::No .ipk files found in output_ipk/; skipping APK conversion"
+          else
+            for ipk in "${IPK_FILES[@]}"; do
+              base_name="$(basename "$ipk" .ipk)"
+              apk_out="output_apk/${base_name}.apk"
+              echo "Converting '$ipk' -> '$apk_out'"
+              python3 "$CONVERTER" "$ipk" -o "$apk_out"
+              test -s "$apk_out" || { echo "::error::Conversion produced an empty or missing APK: $apk_out"; exit 1; }
+            done
+            echo "APK conversion complete:"
+            ls -l output_apk/
+          fi
 
       # 步骤 8: 收集和准备文件
       - name: Collect artifacts
