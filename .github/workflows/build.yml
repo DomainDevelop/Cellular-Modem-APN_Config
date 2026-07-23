@@ -30,6 +30,11 @@ env:
   # 3. Specify the SDK save directory, generally without modification.
   # 3. 指定SDK保存目录，一般不用修改
   SDK_DIR: /home/runner/work/openwrt-sdk
+
+  # 4. Pinned commit of DomainDevelop/openwrt-ipk2apk used to convert IPK to APK.
+  #    Update this SHA when you want to pull in upstream converter changes.
+  #    Pinned to: main branch HEAD as of 2026-07-23 (adds APK v2 PAX SHA1 support)
+  IPK2APK_CONVERTER_REF: "60caa88a2c5907dc76884b58742304161d644480"
 # ======================================================================================
 # ==                        👆 User configuration area 👆                            ==
 # ======================================================================================
@@ -202,10 +207,10 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: DomainDevelop/openwrt-ipk2apk
-          ref: 60caa88a2c5907dc76884b58742304161d644480
+          ref: ${{ env.IPK2APK_CONVERTER_REF }}
           path: converter-src
 
-      # 步骤 7b: 将 IPK 转换为 APK (使用 openwrt-ipk2apk)
+      # 步骤 8: 将 IPK 转换为 APK (使用 openwrt-ipk2apk)
       - name: Convert IPK packages to APK
         working-directory: ${{ env.SDK_DIR }}
         run: |
@@ -229,7 +234,7 @@ jobs:
             ls -l output_apk/
           fi
 
-      # 步骤 8: 收集和准备文件
+      # 步骤 9: 收集和准备文件
       - name: Collect artifacts
         id: collect_artifacts
         working-directory: ${{ env.SDK_DIR }}
@@ -257,7 +262,7 @@ jobs:
           
           echo "path=upload" >> $GITHUB_OUTPUT
 
-      # 步骤 9: 上传构建产物
+      # 步骤 10: 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
