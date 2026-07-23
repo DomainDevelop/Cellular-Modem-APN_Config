@@ -7,7 +7,6 @@ on:
   pull_request:
     branches: [ "main" ]
 
-# Cancel superseded runs on the same ref to keep feedback fast and clean.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -23,7 +22,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Default, XE-3000 class target (OpenWrt 23.05.5 mediatek/filogic).
           - target_name: xe3000
             openwrt_version: "23.05.5"
             target: "mediatek"
@@ -44,7 +42,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses-dev libssl-dev python3-setuptools rsync swig \
-            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates
+            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates tar
 
       - name: Cache OpenWrt SDK
         id: cache-sdk
@@ -70,7 +68,6 @@ jobs:
         id: pkg
         run: |
           set -euxo pipefail
-          # Find the Makefile that declares the OpenWrt package (BuildPackage call).
           PKG_MAKEFILE="$(grep -rlE '^\s*\$\(eval \$\(call BuildPackage' package-src --include=Makefile | head -n1)"
           test -n "$PKG_MAKEFILE" || { echo "::error::Could not find an OpenWrt package Makefile (BuildPackage) in the repository"; exit 1; }
           PKG_DIR="$(dirname "$PKG_MAKEFILE")"
@@ -80,27 +77,22 @@ jobs:
           echo "pkg_dir=$PKG_DIR" >> "$GITHUB_OUTPUT"
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Stage package into a custom feed
+      - name: Stage package into SDK
         run: |
           set -euxo pipefail
-          # OpenWrt feeds expect a parent directory that CONTAINS package
-          # subdirectories. The repository root IS the package, so we place it
-          # inside a dedicated feed directory under its package name.
-          FEED_DIR="$GITHUB_WORKSPACE/custom-feed"
           PKG_NAME="${{ steps.pkg.outputs.pkg_name }}"
           PKG_SRC="$GITHUB_WORKSPACE/${{ steps.pkg.outputs.pkg_dir }}"
-          rm -rf "$FEED_DIR"
-          mkdir -p "$FEED_DIR/$PKG_NAME"
-          # Copy the package sources (Makefile + files), excluding VCS/CI metadata.
+          rm -rf "openwrt-sdk/package/$PKG_NAME"
+          mkdir -p "openwrt-sdk/package/$PKG_NAME"
           rsync -a --delete \
             --exclude '.git' --exclude '.github' \
-            "$PKG_SRC"/ "$FEED_DIR/$PKG_NAME"/
-          echo "src-link custom $FEED_DIR" > openwrt-sdk/feeds.conf.default
+            "$PKG_SRC"/ "openwrt-sdk/package/$PKG_NAME"/
 
       - name: Update and install feeds
         working-directory: openwrt-sdk
         run: |
           set -euxo pipefail
+          sed -i 's|https://git.openwrt.org/feed/|https://github.com/openwrt/|g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
@@ -109,27 +101,24 @@ jobs:
         run: |
           set -euxo pipefail
           make defconfig
-          # Build only the target package; -j1 + V=s gives clear, fail-fast logs.
           make "package/${{ steps.pkg.outputs.pkg_name }}/compile" -j1 V=s
 
       - name: Collect .ipk artifacts
         id: collect
         run: |
           set -euxo pipefail
-          mkdir -p artifacts
-          # Gather every generated .ipk from the SDK output tree.
+          mkdir -p artifacts/ipk artifacts/apk
           mapfile -t IPKS < <(find openwrt-sdk/bin -type f -name '*.ipk')
           test "${#IPKS[@]}" -gt 0 || { echo "::error::No .ipk files were produced by the build"; exit 1; }
           for f in "${IPKS[@]}"; do
             echo "Found package: $f"
-            cp "$f" artifacts/
+            cp "$f" artifacts/ipk/
           done
-          ( cd artifacts && sha256sum *.ipk > SHA256SUMS )
-          # Primary package file name (used for the artifact name).
-          PRIMARY_IPK="$(cd artifacts && ls ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
-          test -n "$PRIMARY_IPK" || PRIMARY_IPK="$(cd artifacts && ls *.ipk | head -n1)"
+          ( cd artifacts/ipk && sha256sum *.ipk > SHA256SUMS )
+          PRIMARY_IPK="$(cd artifacts/ipk && ls ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
+          test -n "$PRIMARY_IPK" || PRIMARY_IPK="$(cd artifacts/ipk && ls *.ipk | head -n1)"
           echo "primary_ipk=$PRIMARY_IPK" >> "$GITHUB_OUTPUT"
-          cat > artifacts/INSTALL.txt <<EOF
+          cat > artifacts/ipk/INSTALL.txt <<EOF
           Offline install of $PRIMARY_IPK on an OpenWrt router
           =====================================================
 
@@ -150,24 +139,184 @@ jobs:
             sha256sum -c SHA256SUMS
           EOF
 
-      - name: Validate generated package format
+      - name: Validate generated .ipk format
         run: |
           set -euo pipefail
-          IPK_FILE="artifacts/${{ steps.collect.outputs.primary_ipk }}"
+          IPK_FILE="artifacts/ipk/${{ steps.collect.outputs.primary_ipk }}"
           test -f "$IPK_FILE" || { echo "::error::Expected .ipk not found: $IPK_FILE"; exit 1; }
           command -v ar >/dev/null 2>&1 || { echo "::error::'ar' tool is required to validate .ipk archive format"; exit 1; }
           AR_ENTRIES="$(ar t "$IPK_FILE")"
           printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "::error::Missing debian-binary in package"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^control\.tar" || { echo "::error::Missing control.tar.* in package"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.* in package"; exit 1; }
-          echo "Package format OK: $IPK_FILE"
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^control\.tar\.' || { echo "::error::Missing control.tar.* in package"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^data\.tar\.' || { echo "::error::Missing data.tar.* in package"; exit 1; }
 
-      - name: Upload .ipk artifact
+      - name: Convert .ipk to .apk (gonav8 method)
+        run: |
+          set -euo pipefail
+          APK_STATIC_URL="https://raw.githubusercontent.com/gonav8/Openwrt-IPK-to-APK/448ac9c83bf7a2624ec99652bce526ac66395fcd/server/bin/apk.static"
+          APK_STATIC_SHA256="a8e24d287e4571d6fe927e5e07007c2e879abad82e1cb32a4232885f2a703d3c"
+          curl -fsSL "$APK_STATIC_URL" -o /tmp/apk.static
+          echo "${APK_STATIC_SHA256}  /tmp/apk.static" | sha256sum -c -
+          chmod +x /tmp/apk.static
+
+          shopt -s nullglob
+          for ipk in artifacts/ipk/*.ipk; do
+            base="$(basename "$ipk" .ipk)"
+            workdir="$(mktemp -d)"
+
+            ar t "$ipk" > "$workdir/ar-list.txt"
+            control_member="$(grep -E '^control\.tar\.' "$workdir/ar-list.txt" | head -n1 || true)"
+            data_member="$(grep -E '^data\.tar\.' "$workdir/ar-list.txt" | head -n1 || true)"
+            debian_member="$(grep -E '^debian-binary$' "$workdir/ar-list.txt" | head -n1 || true)"
+            test -n "$control_member" && test -n "$data_member" && test -n "$debian_member"
+
+            ar p "$ipk" "$control_member" > "$workdir/control.tar"
+            ar p "$ipk" "$data_member" > "$workdir/data.tar"
+            ar p "$ipk" "$debian_member" > "$workdir/debian-binary"
+
+            mkdir -p "$workdir/control" "$workdir/data" "$workdir/scripts"
+            tar -xf "$workdir/control.tar" -C "$workdir/control"
+            tar -xf "$workdir/data.tar" -C "$workdir/data"
+
+            control_file="$(find "$workdir/control" -type f -name control | head -n1)"
+            test -f "$control_file"
+
+            pkg_name="$(awk -F': ' 'tolower($1)=="package"{print $2;exit}' "$control_file")"
+            pkg_ver="$(awk -F': ' 'tolower($1)=="version"{print $2;exit}' "$control_file")"
+            pkg_arch="$(awk -F': ' 'tolower($1)=="architecture"{print $2;exit}' "$control_file")"
+            pkg_desc="$(awk '
+              BEGIN{in_desc=0; desc=""}
+              tolower($0) ~ /^description:[[:space:]]*/ {
+                in_desc=1
+                line=$0
+                sub(/^[^:]*:[[:space:]]*/, "", line)
+                desc=line
+                next
+              }
+              in_desc && $0 ~ /^[ \t]+/ {
+                gsub(/^[ \t]+/, "", $0)
+                desc=desc " " $0
+                next
+              }
+              in_desc {print desc; exit}
+              END{if (in_desc) print desc}
+            ' "$control_file")"
+            pkg_license="$(awk -F': ' 'tolower($1)=="license"{print $2;exit}' "$control_file")"
+            pkg_maint="$(awk -F': ' 'tolower($1)=="maintainer"{print $2;exit}' "$control_file")"
+            pkg_url="$(awk -F': ' 'tolower($1)=="url"{print $2;exit}' "$control_file")"
+            pkg_source="$(awk -F': ' 'tolower($1)=="source"{print $2;exit}' "$control_file")"
+            pkg_deps="$(awk -F': ' 'tolower($1)=="depends"{print $2;exit}' "$control_file")"
+
+            test -n "$pkg_name" || { echo "::error::Missing package name in $ipk"; exit 1; }
+            test -n "$pkg_ver" || { echo "::error::Missing version in $ipk"; exit 1; }
+            test -n "$pkg_arch" || { echo "::error::Missing architecture in $ipk"; exit 1; }
+
+            # APK packages require a revision suffix; default to -r0 when the
+            # source IPK version has no trailing -rN revision marker.
+            if ! [[ "$pkg_ver" =~ -r[0-9]+$ ]]; then
+              pkg_ver="${pkg_ver}-r0"
+            fi
+
+            case "$pkg_arch" in
+              all) apk_arch="noarch" ;;
+              aarch64_cortex-a53|aarch64) apk_arch="aarch64" ;;
+              x86_64) apk_arch="x86_64" ;;
+              *) apk_arch="$pkg_arch" ;;
+            esac
+
+            script_map=(
+              "preinst:pre-install"
+              "postinst:post-install"
+              "prerm:pre-deinstall"
+              "postrm:post-deinstall"
+              "preinst-pkg:pre-install"
+              "postinst-pkg:post-install"
+              "prerm-pkg:pre-deinstall"
+              "postrm-pkg:post-deinstall"
+            )
+            script_args=()
+            for m in "${script_map[@]}"; do
+              src="${m%%:*}"
+              dst="${m##*:}"
+              src_path="$(find "$workdir/control" -type f -name "$src" | head -n1 || true)"
+              if [ -n "$src_path" ]; then
+                dst_path="$workdir/scripts/$dst"
+                cp "$src_path" "$dst_path"
+                if ! head -n1 "$dst_path" | grep -q '^#!'; then
+                  script_tmp="$workdir/scripts/.tmp-${dst}"
+                  {
+                    echo '#!/bin/sh'
+                    cat "$dst_path"
+                  } > "$script_tmp"
+                  mv "$script_tmp" "$dst_path"
+                fi
+                chmod +x "$dst_path"
+                script_args+=(--script "$dst:$dst_path")
+              fi
+            done
+
+            output="artifacts/apk/${pkg_name}-${pkg_ver}.apk"
+            args=(
+              mkpkg
+              --info "name:${pkg_name}"
+              --info "version:${pkg_ver}"
+              --info "arch:${apk_arch}"
+              --info "description:${pkg_desc:-Converted from OpenWrt IPK package}"
+              --info "license:${pkg_license:-Unknown}"
+              --files "$workdir/data"
+              --output "$output"
+            )
+            [ -n "$pkg_maint" ] && args+=(--info "maintainer:${pkg_maint}")
+            [ -n "$pkg_url" ] && args+=(--info "url:${pkg_url}")
+            [ -n "$pkg_source" ] && args+=(--info "origin:${pkg_source}")
+            if [ -n "$pkg_deps" ]; then
+              # Exclude libc-style entries (e.g. "libc", "libc (>= ...)")
+              # to match the gonav8 converter behavior and avoid pinning base libc.
+              deps="$(
+                echo "$pkg_deps" \
+                  | tr ',' '\n' \
+                  | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+                  | grep -Ev '^libc([[:space:]]*(\(.*\))?)?$' \
+                  | xargs || true
+              )"
+              [ -n "$deps" ] && args+=(--info "depends:${deps}")
+            fi
+            args+=("${script_args[@]}")
+
+            /tmp/apk.static "${args[@]}"
+            test -s "$output"
+
+            rm -rf "$workdir"
+            echo "Converted $base.ipk -> $(basename "$output")"
+          done
+          shopt -u nullglob
+
+          apk_count="$(find artifacts/apk -type f -name '*.apk' | wc -l | tr -d ' ')"
+          test "${apk_count}" -gt 0 || { echo "::error::No .apk files were created"; exit 1; }
+          ( cd artifacts/apk && sha256sum *.apk > SHA256SUMS )
+          cat > artifacts/apk/INSTALL_APK.txt <<EOF
+          Install converted APK on OpenWrt 25.x
+          =====================================
+
+          1. Copy the .apk file to the router:
+               scp *.apk root@<router-ip>:/tmp/
+
+          2. Install with allow-untrusted:
+               apk add --allow-untrusted /tmp/<package>.apk
+
+          3. Optional integrity check before install:
+               sha256sum -c SHA256SUMS
+          EOF
+
+      - name: Upload package artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: openwrt-ipk-${{ steps.collect.outputs.primary_ipk }}
+          name: openwrt-packages-${{ steps.collect.outputs.primary_ipk }}
           path: |
-            artifacts/*.ipk
-            artifacts/SHA256SUMS
-            artifacts/INSTALL.txt
+            artifacts/ipk/*.ipk
+            artifacts/ipk/SHA256SUMS
+            artifacts/ipk/INSTALL.txt
+            artifacts/apk/*.apk
+            artifacts/apk/SHA256SUMS
+            artifacts/apk/INSTALL_APK.txt
           if-no-files-found: error
