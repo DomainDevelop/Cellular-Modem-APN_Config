@@ -38,8 +38,9 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
 The **Build OpenWrt Package** workflow (`.github/workflows/build-openwrt-package.yml`)
 compiles this repo with the official OpenWrt SDK and uploads an artifact containing:
 - installable `.ipk` package(s)
-- `SHA256SUMS`
-- `INSTALL.txt` (LuCI upload + `opkg` install instructions)
+- converted `.apk` package(s) (IPK → APKv3 conversion flow based on openwrt-ipk2apk)
+- `SHA256SUMS` files for both formats
+- `INSTALL.txt` (`.ipk` via LuCI/`opkg`) and `INSTALL_APK.txt` (`.apk` via `apk`)
 
 The build defaults to the XE-3000 class target: **OpenWrt 23.05.5, `mediatek/filogic`
 (`aarch64_cortex-a53`)**. Because the package is `PKGARCH:=all`, the resulting `.ipk`
@@ -49,10 +50,10 @@ is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
 
 1. Open a completed run of **Build OpenWrt Package** (triggered by push, PR, or a
    manual **Run workflow**).
+   - Optional (manual run): set `ipk2apk_repo` to your fork (`owner/repo`) and `ipk2apk_ref`.
 2. Download the artifact named like:
-   - `openwrt-ipk-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk`
-3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
-   `INSTALL.txt`.
+   - `openwrt-packages-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk` (artifact name derived from the primary `.ipk` filename)
+3. Extract it. You will get `.ipk` files, `.apk` files, checksums, and install guides.
 
 ### Install offline on the router
 
@@ -70,6 +71,16 @@ opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 ```
 
 Optionally verify integrity first with `sha256sum -c SHA256SUMS`.
+
+### Install converted APK on OpenWrt 25.x
+
+```sh
+# copy .apk to router
+scp luci-app-ginet-cellmodem_*.apk root@192.168.1.1:/tmp/
+
+# install converted package (unsigned)
+apk add --allow-untrusted /tmp/luci-app-ginet-cellmodem_*.apk
+```
 
 The workflow also validates the generated `.ipk` format (`debian-binary`,
 `control.tar.*`, `data.tar.*`) before upload, so the downloaded artifact matches

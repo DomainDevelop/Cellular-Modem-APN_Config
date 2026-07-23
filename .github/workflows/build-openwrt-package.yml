@@ -2,12 +2,20 @@ name: Build OpenWrt Package
 
 on:
   workflow_dispatch:
+    inputs:
+      ipk2apk_repo:
+        description: "Fork repo for openwrt-ipk2apk converter (owner/repo)"
+        required: false
+        default: ""
+      ipk2apk_ref:
+        description: "Branch or tag ref for openwrt-ipk2apk converter"
+        required: false
+        default: "main"
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
-# Cancel superseded runs on the same ref to keep feedback fast and clean.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -23,7 +31,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Default, XE-3000 class target (OpenWrt 23.05.5 mediatek/filogic).
           - target_name: xe3000
             openwrt_version: "23.05.5"
             target: "mediatek"
@@ -44,7 +51,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses-dev libssl-dev python3-setuptools rsync swig \
-            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates
+            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates tar
 
       - name: Cache OpenWrt SDK
         id: cache-sdk
@@ -70,7 +77,6 @@ jobs:
         id: pkg
         run: |
           set -euxo pipefail
-          # Find the Makefile that declares the OpenWrt package (BuildPackage call).
           PKG_MAKEFILE="$(grep -rlE '^\s*\$\(eval \$\(call BuildPackage' package-src --include=Makefile | head -n1)"
           test -n "$PKG_MAKEFILE" || { echo "::error::Could not find an OpenWrt package Makefile (BuildPackage) in the repository"; exit 1; }
           PKG_DIR="$(dirname "$PKG_MAKEFILE")"
@@ -80,27 +86,23 @@ jobs:
           echo "pkg_dir=$PKG_DIR" >> "$GITHUB_OUTPUT"
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Stage package into a custom feed
+      - name: Stage package into SDK
         run: |
           set -euxo pipefail
-          # OpenWrt feeds expect a parent directory that CONTAINS package
-          # subdirectories. The repository root IS the package, so we place it
-          # inside a dedicated feed directory under its package name.
-          FEED_DIR="$GITHUB_WORKSPACE/custom-feed"
           PKG_NAME="${{ steps.pkg.outputs.pkg_name }}"
           PKG_SRC="$GITHUB_WORKSPACE/${{ steps.pkg.outputs.pkg_dir }}"
-          rm -rf "$FEED_DIR"
-          mkdir -p "$FEED_DIR/$PKG_NAME"
-          # Copy the package sources (Makefile + files), excluding VCS/CI metadata.
+          rm -rf "openwrt-sdk/package/$PKG_NAME"
+          mkdir -p "openwrt-sdk/package/$PKG_NAME"
           rsync -a --delete \
             --exclude '.git' --exclude '.github' \
-            "$PKG_SRC"/ "$FEED_DIR/$PKG_NAME"/
-          echo "src-link custom $FEED_DIR" > openwrt-sdk/feeds.conf.default
+            "$PKG_SRC"/ "openwrt-sdk/package/$PKG_NAME"/
 
       - name: Update and install feeds
         working-directory: openwrt-sdk
         run: |
           set -euxo pipefail
+          # Use GitHub mirrors because git.openwrt.org is flaky from Actions runners.
+          sed -i 's|https://git.openwrt.org/feed/|https://github.com/openwrt/|g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
@@ -109,27 +111,24 @@ jobs:
         run: |
           set -euxo pipefail
           make defconfig
-          # Build only the target package; -j1 + V=s gives clear, fail-fast logs.
           make "package/${{ steps.pkg.outputs.pkg_name }}/compile" -j1 V=s
 
       - name: Collect .ipk artifacts
         id: collect
         run: |
           set -euxo pipefail
-          mkdir -p artifacts
-          # Gather every generated .ipk from the SDK output tree.
+          mkdir -p artifacts/ipk artifacts/apk
           mapfile -t IPKS < <(find openwrt-sdk/bin -type f -name '*.ipk')
           test "${#IPKS[@]}" -gt 0 || { echo "::error::No .ipk files were produced by the build"; exit 1; }
           for f in "${IPKS[@]}"; do
             echo "Found package: $f"
-            cp "$f" artifacts/
+            cp "$f" artifacts/ipk/
           done
-          ( cd artifacts && sha256sum *.ipk > SHA256SUMS )
-          # Primary package file name (used for the artifact name).
-          PRIMARY_IPK="$(cd artifacts && ls ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
-          test -n "$PRIMARY_IPK" || PRIMARY_IPK="$(cd artifacts && ls *.ipk | head -n1)"
+          ( cd artifacts/ipk && sha256sum *.ipk > SHA256SUMS )
+          PRIMARY_IPK="$(cd artifacts/ipk && ls ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
+          test -n "$PRIMARY_IPK" || PRIMARY_IPK="$(cd artifacts/ipk && ls *.ipk | head -n1)"
           echo "primary_ipk=$PRIMARY_IPK" >> "$GITHUB_OUTPUT"
-          cat > artifacts/INSTALL.txt <<EOF
+          cat > artifacts/ipk/INSTALL.txt <<EOF
           Offline install of $PRIMARY_IPK on an OpenWrt router
           =====================================================
 
@@ -150,24 +149,117 @@ jobs:
             sha256sum -c SHA256SUMS
           EOF
 
-      - name: Validate generated package format
+      - name: Validate generated .ipk format
         run: |
           set -euo pipefail
-          IPK_FILE="artifacts/${{ steps.collect.outputs.primary_ipk }}"
+          IPK_FILE="artifacts/ipk/${{ steps.collect.outputs.primary_ipk }}"
           test -f "$IPK_FILE" || { echo "::error::Expected .ipk not found: $IPK_FILE"; exit 1; }
           command -v ar >/dev/null 2>&1 || { echo "::error::'ar' tool is required to validate .ipk archive format"; exit 1; }
           AR_ENTRIES="$(ar t "$IPK_FILE")"
           printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "::error::Missing debian-binary in package"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^control\.tar" || { echo "::error::Missing control.tar.* in package"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.* in package"; exit 1; }
-          echo "Package format OK: $IPK_FILE"
+          # IPK members are expected to be compressed control/data tarballs.
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^control\.tar\..+$' || { echo "::error::Missing control.tar.* in package"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^data\.tar\..+$' || { echo "::error::Missing data.tar.* in package"; exit 1; }
 
-      - name: Upload .ipk artifact
+      - name: Convert .ipk to .apk (openwrt-ipk2apk)
+        env:
+          IPK2APK_REPO_INPUT: ${{ github.event.inputs.ipk2apk_repo }}
+          IPK2APK_REF_INPUT: ${{ github.event.inputs.ipk2apk_ref }}
+        run: |
+          set -euo pipefail
+          TOOLS_DIR="$RUNNER_TEMP/openwrt-ipk2apk"
+          DEFAULT_REPO="${GITHUB_REPOSITORY_OWNER}/openwrt-ipk2apk"
+          # Upstream fallback when the user fork is unavailable.
+          FALLBACK_REPO="rychly/openwrt-ipk2apk"
+          FALLBACK_REF="main"
+          IPK2APK_REPO="${IPK2APK_REPO_INPUT:-$DEFAULT_REPO}"
+          IPK2APK_REF="${IPK2APK_REF_INPUT:-main}"
+
+          clone_repo_ref() {
+            local repo="$1"
+            local ref="$2"
+            local dest="$3"
+            git clone --depth=1 --branch "$ref" "https://github.com/${repo}.git" "$dest"
+          }
+
+          rm -rf "$TOOLS_DIR"
+          if git ls-remote --exit-code "https://github.com/${IPK2APK_REPO}.git" >/dev/null 2>&1 && \
+             clone_repo_ref "$IPK2APK_REPO" "$IPK2APK_REF" "$TOOLS_DIR"; then
+            echo "Using converter repo ${IPK2APK_REPO}@${IPK2APK_REF}"
+          else
+            rm -rf "$TOOLS_DIR"
+            echo "::warning::Could not use ${IPK2APK_REPO}@${IPK2APK_REF}; falling back to ${FALLBACK_REPO}"
+            if git ls-remote --exit-code "https://github.com/${FALLBACK_REPO}.git" >/dev/null 2>&1 && \
+               clone_repo_ref "$FALLBACK_REPO" "$FALLBACK_REF" "$TOOLS_DIR"; then
+              echo "Using fallback repo ${FALLBACK_REPO}@${FALLBACK_REF}"
+            else
+              echo "::error::Could not clone fallback repo ${FALLBACK_REPO}@${FALLBACK_REF}"
+              rm -rf "$TOOLS_DIR"
+              exit 1
+            fi
+          fi
+
+          test -f "$TOOLS_DIR/openwrt-ipk2apk.py" || { echo "::error::Missing openwrt-ipk2apk.py in converter repo"; exit 1; }
+          test -f "$TOOLS_DIR/convert-apk-v2-to-v3.sh" || { echo "::error::Missing convert-apk-v2-to-v3.sh in converter repo"; exit 1; }
+          chmod +x "$TOOLS_DIR/convert-apk-v2-to-v3.sh"
+
+          shopt -s nullglob
+          for ipk in artifacts/ipk/*.ipk; do
+            base="$(basename "$ipk" .ipk)"
+            output="artifacts/apk/${base}.apk"
+            python3 "$TOOLS_DIR/openwrt-ipk2apk.py" "$ipk" -o "$output" || { echo "::error::openwrt-ipk2apk failed for $ipk"; exit 1; }
+          done
+          shopt -u nullglob
+
+          docker run --rm \
+            -v "$PWD:/work" \
+            -v "$TOOLS_DIR:/tools:ro" \
+            -w /work \
+            alpine:3.22 \
+            sh -c '
+              set -euo pipefail
+              # util-linux provides GNU getopt required by convert-apk-v2-to-v3.sh.
+              apk add --no-cache bash gzip tar coreutils findutils util-linux
+              cp /tools/convert-apk-v2-to-v3.sh /tmp/convert-apk-v2-to-v3.sh
+              chmod +x /tmp/convert-apk-v2-to-v3.sh
+              /tmp/convert-apk-v2-to-v3.sh --check-deps
+              for apk in /work/artifacts/apk/*.apk; do
+                /tmp/convert-apk-v2-to-v3.sh "$apk"
+              done
+            '
+
+          shopt -s nullglob
+          for apk in artifacts/apk/*.apk; do
+            test -s "$apk" || { echo "::error::Empty APK output: $apk"; exit 1; }
+            echo "Converted -> $(basename "$apk")"
+          done
+          shopt -u nullglob
+
+          ls artifacts/apk/*.apk >/dev/null 2>&1 || { echo "::error::No .apk files were created"; exit 1; }
+          ( cd artifacts/apk && sha256sum *.apk > SHA256SUMS )
+          cat > artifacts/apk/INSTALL_APK.txt <<EOF
+          Install converted APK on OpenWrt 25.x
+          =====================================
+
+          1. Copy the .apk file to the router:
+               scp *.apk root@<router-ip>:/tmp/
+
+          2. Install with allow-untrusted:
+               apk add --allow-untrusted /tmp/<package>.apk
+
+          3. Optional integrity check before install:
+               sha256sum -c SHA256SUMS
+          EOF
+
+      - name: Upload package artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: openwrt-ipk-${{ steps.collect.outputs.primary_ipk }}
+          name: openwrt-packages-${{ steps.collect.outputs.primary_ipk }}
           path: |
-            artifacts/*.ipk
-            artifacts/SHA256SUMS
-            artifacts/INSTALL.txt
+            artifacts/ipk/*.ipk
+            artifacts/ipk/SHA256SUMS
+            artifacts/ipk/INSTALL.txt
+            artifacts/apk/*.apk
+            artifacts/apk/SHA256SUMS
+            artifacts/apk/INSTALL_APK.txt
           if-no-files-found: error
