@@ -2,6 +2,15 @@ name: Build OpenWrt Package
 
 on:
   workflow_dispatch:
+    inputs:
+      ipk2apk_repo:
+        description: "Fork repo for openwrt-ipk2apk converter (owner/repo)"
+        required: false
+        default: ""
+      ipk2apk_ref:
+        description: "Branch or tag ref for openwrt-ipk2apk converter"
+        required: false
+        default: "main"
   push:
     branches: [ "main" ]
   pull_request:
@@ -92,6 +101,7 @@ jobs:
         working-directory: openwrt-sdk
         run: |
           set -euxo pipefail
+          # Use GitHub mirrors because git.openwrt.org is flaky from Actions runners.
           sed -i 's|https://git.openwrt.org/feed/|https://github.com/openwrt/|g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
@@ -147,152 +157,85 @@ jobs:
           command -v ar >/dev/null 2>&1 || { echo "::error::'ar' tool is required to validate .ipk archive format"; exit 1; }
           AR_ENTRIES="$(ar t "$IPK_FILE")"
           printf '%s\n' "$AR_ENTRIES" | grep -qx "debian-binary" || { echo "::error::Missing debian-binary in package"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^control\.tar\.' || { echo "::error::Missing control.tar.* in package"; exit 1; }
-          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^data\.tar\.' || { echo "::error::Missing data.tar.* in package"; exit 1; }
+          # IPK members are expected to be compressed control/data tarballs.
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^control\.tar\..+$' || { echo "::error::Missing control.tar.* in package"; exit 1; }
+          printf '%s\n' "$AR_ENTRIES" | grep -Eq '^data\.tar\..+$' || { echo "::error::Missing data.tar.* in package"; exit 1; }
 
-      - name: Convert .ipk to .apk (gonav8 method)
+      - name: Convert .ipk to .apk (openwrt-ipk2apk)
+        env:
+          IPK2APK_REPO_INPUT: ${{ github.event.inputs.ipk2apk_repo }}
+          IPK2APK_REF_INPUT: ${{ github.event.inputs.ipk2apk_ref }}
         run: |
           set -euo pipefail
-          APK_STATIC_URL="https://raw.githubusercontent.com/gonav8/Openwrt-IPK-to-APK/448ac9c83bf7a2624ec99652bce526ac66395fcd/server/bin/apk.static"
-          APK_STATIC_SHA256="a8e24d287e4571d6fe927e5e07007c2e879abad82e1cb32a4232885f2a703d3c"
-          curl -fsSL "$APK_STATIC_URL" -o /tmp/apk.static
-          echo "${APK_STATIC_SHA256}  /tmp/apk.static" | sha256sum -c -
-          chmod +x /tmp/apk.static
+          TOOLS_DIR="$RUNNER_TEMP/openwrt-ipk2apk"
+          DEFAULT_REPO="${GITHUB_REPOSITORY_OWNER}/openwrt-ipk2apk"
+          # Upstream fallback when the user fork is unavailable.
+          FALLBACK_REPO="rychly/openwrt-ipk2apk"
+          FALLBACK_REF="main"
+          IPK2APK_REPO="${IPK2APK_REPO_INPUT:-$DEFAULT_REPO}"
+          IPK2APK_REF="${IPK2APK_REF_INPUT:-main}"
+
+          clone_repo_ref() {
+            local repo="$1"
+            local ref="$2"
+            local dest="$3"
+            git clone --depth=1 --branch "$ref" "https://github.com/${repo}.git" "$dest"
+          }
+
+          rm -rf "$TOOLS_DIR"
+          if git ls-remote --exit-code "https://github.com/${IPK2APK_REPO}.git" >/dev/null 2>&1 && \
+             clone_repo_ref "$IPK2APK_REPO" "$IPK2APK_REF" "$TOOLS_DIR"; then
+            echo "Using converter repo ${IPK2APK_REPO}@${IPK2APK_REF}"
+          else
+            rm -rf "$TOOLS_DIR"
+            echo "::warning::Could not use ${IPK2APK_REPO}@${IPK2APK_REF}; falling back to ${FALLBACK_REPO}"
+            if git ls-remote --exit-code "https://github.com/${FALLBACK_REPO}.git" >/dev/null 2>&1 && \
+               clone_repo_ref "$FALLBACK_REPO" "$FALLBACK_REF" "$TOOLS_DIR"; then
+              echo "Using fallback repo ${FALLBACK_REPO}@${FALLBACK_REF}"
+            else
+              echo "::error::Could not clone fallback repo ${FALLBACK_REPO}@${FALLBACK_REF}"
+              rm -rf "$TOOLS_DIR"
+              exit 1
+            fi
+          fi
+
+          test -f "$TOOLS_DIR/openwrt-ipk2apk.py" || { echo "::error::Missing openwrt-ipk2apk.py in converter repo"; exit 1; }
+          test -f "$TOOLS_DIR/convert-apk-v2-to-v3.sh" || { echo "::error::Missing convert-apk-v2-to-v3.sh in converter repo"; exit 1; }
+          chmod +x "$TOOLS_DIR/convert-apk-v2-to-v3.sh"
 
           shopt -s nullglob
           for ipk in artifacts/ipk/*.ipk; do
             base="$(basename "$ipk" .ipk)"
-            workdir="$(mktemp -d)"
-
-            ar t "$ipk" > "$workdir/ar-list.txt"
-            control_member="$(grep -E '^control\.tar\.' "$workdir/ar-list.txt" | head -n1 || true)"
-            data_member="$(grep -E '^data\.tar\.' "$workdir/ar-list.txt" | head -n1 || true)"
-            debian_member="$(grep -E '^debian-binary$' "$workdir/ar-list.txt" | head -n1 || true)"
-            test -n "$control_member" && test -n "$data_member" && test -n "$debian_member"
-
-            ar p "$ipk" "$control_member" > "$workdir/control.tar"
-            ar p "$ipk" "$data_member" > "$workdir/data.tar"
-            ar p "$ipk" "$debian_member" > "$workdir/debian-binary"
-
-            mkdir -p "$workdir/control" "$workdir/data" "$workdir/scripts"
-            tar -xf "$workdir/control.tar" -C "$workdir/control"
-            tar -xf "$workdir/data.tar" -C "$workdir/data"
-
-            control_file="$(find "$workdir/control" -type f -name control | head -n1)"
-            test -f "$control_file"
-
-            pkg_name="$(awk -F': ' 'tolower($1)=="package"{print $2;exit}' "$control_file")"
-            pkg_ver="$(awk -F': ' 'tolower($1)=="version"{print $2;exit}' "$control_file")"
-            pkg_arch="$(awk -F': ' 'tolower($1)=="architecture"{print $2;exit}' "$control_file")"
-            pkg_desc="$(awk '
-              BEGIN{in_desc=0; desc=""}
-              tolower($0) ~ /^description:[[:space:]]*/ {
-                in_desc=1
-                line=$0
-                sub(/^[^:]*:[[:space:]]*/, "", line)
-                desc=line
-                next
-              }
-              in_desc && $0 ~ /^[ \t]+/ {
-                gsub(/^[ \t]+/, "", $0)
-                desc=desc " " $0
-                next
-              }
-              in_desc {print desc; exit}
-              END{if (in_desc) print desc}
-            ' "$control_file")"
-            pkg_license="$(awk -F': ' 'tolower($1)=="license"{print $2;exit}' "$control_file")"
-            pkg_maint="$(awk -F': ' 'tolower($1)=="maintainer"{print $2;exit}' "$control_file")"
-            pkg_url="$(awk -F': ' 'tolower($1)=="url"{print $2;exit}' "$control_file")"
-            pkg_source="$(awk -F': ' 'tolower($1)=="source"{print $2;exit}' "$control_file")"
-            pkg_deps="$(awk -F': ' 'tolower($1)=="depends"{print $2;exit}' "$control_file")"
-
-            test -n "$pkg_name" || { echo "::error::Missing package name in $ipk"; exit 1; }
-            test -n "$pkg_ver" || { echo "::error::Missing version in $ipk"; exit 1; }
-            test -n "$pkg_arch" || { echo "::error::Missing architecture in $ipk"; exit 1; }
-
-            # APK packages require a revision suffix; default to -r0 when the
-            # source IPK version has no trailing -rN revision marker.
-            if ! [[ "$pkg_ver" =~ -r[0-9]+$ ]]; then
-              pkg_ver="${pkg_ver}-r0"
-            fi
-
-            case "$pkg_arch" in
-              all) apk_arch="noarch" ;;
-              aarch64_cortex-a53|aarch64) apk_arch="aarch64" ;;
-              x86_64) apk_arch="x86_64" ;;
-              *) apk_arch="$pkg_arch" ;;
-            esac
-
-            script_map=(
-              "preinst:pre-install"
-              "postinst:post-install"
-              "prerm:pre-deinstall"
-              "postrm:post-deinstall"
-              "preinst-pkg:pre-install"
-              "postinst-pkg:post-install"
-              "prerm-pkg:pre-deinstall"
-              "postrm-pkg:post-deinstall"
-            )
-            script_args=()
-            for m in "${script_map[@]}"; do
-              src="${m%%:*}"
-              dst="${m##*:}"
-              src_path="$(find "$workdir/control" -type f -name "$src" | head -n1 || true)"
-              if [ -n "$src_path" ]; then
-                dst_path="$workdir/scripts/$dst"
-                cp "$src_path" "$dst_path"
-                if ! head -n1 "$dst_path" | grep -q '^#!'; then
-                  script_tmp="$workdir/scripts/.tmp-${dst}"
-                  {
-                    echo '#!/bin/sh'
-                    cat "$dst_path"
-                  } > "$script_tmp"
-                  mv "$script_tmp" "$dst_path"
-                fi
-                chmod +x "$dst_path"
-                script_args+=(--script "$dst:$dst_path")
-              fi
-            done
-
-            output="artifacts/apk/${pkg_name}-${pkg_ver}.apk"
-            args=(
-              mkpkg
-              --info "name:${pkg_name}"
-              --info "version:${pkg_ver}"
-              --info "arch:${apk_arch}"
-              --info "description:${pkg_desc:-Converted from OpenWrt IPK package}"
-              --info "license:${pkg_license:-Unknown}"
-              --files "$workdir/data"
-              --output "$output"
-            )
-            [ -n "$pkg_maint" ] && args+=(--info "maintainer:${pkg_maint}")
-            [ -n "$pkg_url" ] && args+=(--info "url:${pkg_url}")
-            [ -n "$pkg_source" ] && args+=(--info "origin:${pkg_source}")
-            if [ -n "$pkg_deps" ]; then
-              # Exclude libc-style entries (e.g. "libc", "libc (>= ...)")
-              # to match the gonav8 converter behavior and avoid pinning base libc.
-              deps="$(
-                echo "$pkg_deps" \
-                  | tr ',' '\n' \
-                  | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
-                  | grep -Ev '^libc([[:space:]]*(\(.*\))?)?$' \
-                  | xargs || true
-              )"
-              [ -n "$deps" ] && args+=(--info "depends:${deps}")
-            fi
-            args+=("${script_args[@]}")
-
-            /tmp/apk.static "${args[@]}"
-            test -s "$output"
-
-            rm -rf "$workdir"
-            echo "Converted $base.ipk -> $(basename "$output")"
+            output="artifacts/apk/${base}.apk"
+            python3 "$TOOLS_DIR/openwrt-ipk2apk.py" "$ipk" -o "$output" || { echo "::error::openwrt-ipk2apk failed for $ipk"; exit 1; }
           done
           shopt -u nullglob
 
-          apk_count="$(find artifacts/apk -type f -name '*.apk' | wc -l | tr -d ' ')"
-          test "${apk_count}" -gt 0 || { echo "::error::No .apk files were created"; exit 1; }
+          docker run --rm \
+            -v "$PWD:/work" \
+            -v "$TOOLS_DIR:/tools:ro" \
+            -w /work \
+            alpine:3.22 \
+            sh -c '
+              set -euo pipefail
+              # util-linux provides GNU getopt required by convert-apk-v2-to-v3.sh.
+              apk add --no-cache bash gzip tar coreutils findutils util-linux
+              cp /tools/convert-apk-v2-to-v3.sh /tmp/convert-apk-v2-to-v3.sh
+              chmod +x /tmp/convert-apk-v2-to-v3.sh
+              /tmp/convert-apk-v2-to-v3.sh --check-deps
+              for apk in /work/artifacts/apk/*.apk; do
+                /tmp/convert-apk-v2-to-v3.sh "$apk"
+              done
+            '
+
+          shopt -s nullglob
+          for apk in artifacts/apk/*.apk; do
+            test -s "$apk" || { echo "::error::Empty APK output: $apk"; exit 1; }
+            echo "Converted -> $(basename "$apk")"
+          done
+          shopt -u nullglob
+
+          ls artifacts/apk/*.apk >/dev/null 2>&1 || { echo "::error::No .apk files were created"; exit 1; }
           ( cd artifacts/apk && sha256sum *.apk > SHA256SUMS )
           cat > artifacts/apk/INSTALL_APK.txt <<EOF
           Install converted APK on OpenWrt 25.x

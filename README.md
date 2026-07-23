@@ -38,7 +38,7 @@ This package implements best-practice hardening feasible on OpenWrt/LuCI (strict
 The **Build OpenWrt Package** workflow (`.github/workflows/build-openwrt-package.yml`)
 compiles this repo with the official OpenWrt SDK and uploads an artifact containing:
 - installable `.ipk` package(s)
-- converted `.apk` package(s) (IPK → APKv3 conversion flow based on gonav8/Openwrt-IPK-to-APK)
+- converted `.apk` package(s) (IPK → APKv3 conversion flow based on openwrt-ipk2apk)
 - `SHA256SUMS` files for both formats
 - `INSTALL.txt` (`.ipk` via LuCI/`opkg`) and `INSTALL_APK.txt` (`.apk` via `apk`)
 
@@ -50,6 +50,7 @@ is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
 
 1. Open a completed run of **Build OpenWrt Package** (triggered by push, PR, or a
    manual **Run workflow**).
+   - Optional (manual run): set `ipk2apk_repo` to your fork (`owner/repo`) and `ipk2apk_ref`.
 2. Download the artifact named like:
    - `openwrt-packages-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk` (artifact name derived from the primary `.ipk` filename)
 3. Extract it. You will get `.ipk` files, `.apk` files, checksums, and install guides.
