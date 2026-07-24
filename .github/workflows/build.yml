@@ -68,7 +68,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential rsync unzip zstd
+          sudo apt-get install -y build-essential rsync unzip zstd python3-cryptography
 
       # 步骤 3: 缓存 OpenWrt SDK
       # 缓存已下载和初步设置好的 SDK 目录。
@@ -234,6 +234,49 @@ jobs:
             ls -l output_apk/
           fi
 
+      # 步骤 8b: 签名 APK (使用 ECDSA P-256 / SHA-1)
+      # 设置 APK_SIGNING_KEY secret 以启用签名。未设置时跳过并输出警告。
+      - name: Sign APK packages (ECDSA P-256)
+        working-directory: ${{ env.SDK_DIR }}
+        env:
+          APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APK_SIGNING_KEY:-}" ]; then
+            echo "::warning::APK_SIGNING_KEY secret is not configured."
+            echo "::warning::APK packages will be unsigned. To install on OpenWrt 25.12:"
+            echo "::warning::  apk add --no-network --allow-untrusted /tmp/<package>.apk"
+            exit 0
+          fi
+
+          KEY_NAME="domaindevelop-cellmodem"
+          SIGNER="${{ github.workspace }}/.github/scripts/sign_apk.py"
+          test -f "$SIGNER" || { echo "::error::sign_apk.py not found: $SIGNER"; exit 1; }
+
+          shopt -s nullglob
+          APK_FILES=(output_apk/*.apk)
+          if [ "${#APK_FILES[@]}" -eq 0 ]; then
+            echo "::warning::No APK files to sign; skipping."
+            exit 0
+          fi
+
+          TMPKEY="$(mktemp)"
+          trap 'rm -f "$TMPKEY"' EXIT
+          printf '%s' "$APK_SIGNING_KEY" > "$TMPKEY"
+
+          FIRST=true
+          for apk in "${APK_FILES[@]}"; do
+            echo "Signing: $(basename "$apk")"
+            if [ "$FIRST" = true ]; then
+              python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" \
+                --pubkey "output_apk/${KEY_NAME}.ecdsa.pub" "$apk"
+              FIRST=false
+            else
+              python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" "$apk"
+            fi
+          done
+          echo "All APKs signed."
+
       # 步骤 9: 收集和准备文件
       - name: Collect artifacts
         id: collect_artifacts
@@ -250,6 +293,8 @@ jobs:
           if [ -d "output_apk" ]; then
             echo "Copying APK files..."
             cp output_apk/*.apk upload/ 2>/dev/null || true
+            # Include public key if signing was performed
+            cp output_apk/*.ecdsa.pub upload/ 2>/dev/null || true
           fi
           
           if [ -z "$(ls -A upload)" ]; then
@@ -272,6 +317,11 @@ jobs:
           primary_ipk="${primary_ipk##*/}"
           primary_apk="${primary_apk##*/}"
 
+          signed=""
+          if ls upload/*.ecdsa.pub >/dev/null 2>&1; then
+            signed="yes"
+          fi
+
           cat > upload/INSTALL.txt <<EOF
           Offline install of generated OpenWrt packages
           ============================================
@@ -283,15 +333,32 @@ jobs:
                 opkg install /tmp/${primary_ipk:-package.ipk}
 
           If your router uses apk (OpenWrt 25.12.x and newer):
-            - upload / install the .apk file
+            - Use the .apk file.
             - LuCI's Software page runs: apk add /tmp/upload.apk
-            - unsigned custom .apk files will fail there with UNTRUSTED signature
-            - SSH / USB install for unsigned test builds:
-                apk add --no-network --allow-untrusted /tmp/${primary_apk:-package.apk}
-            - for trusted installs, sign the .apk and copy the public key to /etc/apk/keys/
+            - Custom unsigned APKs are rejected there with UNTRUSTED signature.
+
+          EOF
+
+          if [ "$signed" = "yes" ]; then
+            cat >> upload/INSTALL.txt <<EOF
+            This APK is SIGNED. Trusted offline install:
+              a) Copy the public key to the router ONCE:
+                   scp domaindevelop-cellmodem.ecdsa.pub root@ROUTER:/etc/apk/keys/
+              b) Copy and install the APK:
+                   scp ${primary_apk:-package.apk} root@ROUTER:/tmp/
+                   ssh root@ROUTER "apk add --no-network /tmp/${primary_apk:-package.apk}"
+          EOF
+          else
+            cat >> upload/INSTALL.txt <<EOF
+            This APK is UNSIGNED (APK_SIGNING_KEY secret not configured).
+            Install with:  apk add --no-network --allow-untrusted /tmp/${primary_apk:-package.apk}
+          EOF
+          fi
+
+          cat >> upload/INSTALL.txt <<EOF
 
           If the Software page shows "No packages" or index download errors:
-            - fix router network / DNS / firewall / time before expecting online repo installs
+            - fix router network / DNS / firewall / NTP before expecting online installs.
           EOF
           
           echo "path=upload" >> $GITHUB_OUTPUT

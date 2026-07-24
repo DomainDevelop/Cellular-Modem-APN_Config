@@ -81,24 +81,52 @@ opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 ```
 
-#### OpenWrt 25.12.x and newer (`apk`)
+#### OpenWrt 25.12.x and newer (`apk`) — trusted install
 
-- Use the generated `.apk`, not the `.ipk`.
-- The LuCI Software page on apk-based firmware runs `apk add /tmp/upload.apk`.
-- If the uploaded APK is not signed by a key already trusted in `/etc/apk/keys/`, LuCI
-  will fail with `UNTRUSTED signature`.
-- For unsigned test builds over SSH / USB, install with:
+When the **`APK_SIGNING_KEY` GitHub Actions secret is configured** (see below),
+the CI signs every `.apk` with ECDSA P-256 and includes `domaindevelop-cellmodem.ecdsa.pub`
+in the `apk-packages-*` artifact.
 
+**One-time router setup (copy the public key once):**
+```sh
+scp domaindevelop-cellmodem.ecdsa.pub root@<ROUTER_IP>:/etc/apk/keys/
+```
+
+**Install the signed APK over SSH / USB:**
+```sh
+scp luci-app-ginet-cellmodem_*.apk root@<ROUTER_IP>:/tmp/
+ssh root@<ROUTER_IP> "apk add --no-network /tmp/luci-app-ginet-cellmodem_*.apk"
+```
+
+After the public key is trusted, future updates only require re-running the last
+two `scp` / `apk add` lines — no need to copy the key again.
+
+**If `APK_SIGNING_KEY` is not configured (unsigned build)**, install with:
 ```sh
 apk add --no-network --allow-untrusted /tmp/luci-app-ginet-cellmodem_*.apk
 ```
 
-- For production / trusted installs, sign the `.apk` and copy the matching public key to
-  `/etc/apk/keys/` on the router before installing.
-- If LuCI shows **No packages** or `packages.adb` download warnings, fix router network /
-  DNS / firewall / time first; apk repository indexes are not loading.
+#### Setting up APK package signing
 
-Optionally verify integrity first with `sha256sum -c SHA256SUMS`.
+Generate a persistent EC P-256 keypair **once** on any machine with OpenSSL:
+```sh
+openssl ecparam -name prime256v1 -genkey -noout -out apk-signing-private.pem
+openssl ec -in apk-signing-private.pem -pubout -out apk-signing-public.pem
+```
+
+Add the private key as a GitHub Actions secret:
+- Go to the repository **Settings → Secrets and variables → Actions**
+- Create a secret named **`APK_SIGNING_KEY`**
+- Paste the full PEM content of `apk-signing-private.pem` as the value
+
+The CI derives the public key from the secret during each build and includes it
+in the artifact (`domaindevelop-cellmodem.ecdsa.pub`).  Copy it to the router
+once; all subsequent signed builds will be installable without `--allow-untrusted`.
+
+- If LuCI shows **No packages** or `packages.adb` download warnings, fix router
+  network / DNS / firewall / NTP first; apk repository indexes are not loading.
+
+Optionally verify package integrity before installing: `sha256sum -c SHA256SUMS`.
 
 The workflow also validates the generated `.ipk` format (`debian-binary`,
 `control.tar.*`, `data.tar.*`) before upload, so the downloaded artifact matches
