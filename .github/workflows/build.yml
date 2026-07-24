@@ -239,6 +239,7 @@ jobs:
         id: collect_artifacts
         working-directory: ${{ env.SDK_DIR }}
         run: |
+          set -euo pipefail
           rm -rf upload
           mkdir -p upload
           
@@ -259,6 +260,39 @@ jobs:
           
           echo "Found packages:"
           ls -l upload/
+
+          primary_ipk="$(find upload -maxdepth 1 -type f -name "${PACKAGE_NAME}_*.ipk" | head -n1)"
+          if [ -z "$primary_ipk" ]; then
+            primary_ipk="$(find upload -maxdepth 1 -type f -name '*.ipk' | head -n1)"
+          fi
+          primary_apk="$(find upload -maxdepth 1 -type f -name "${PACKAGE_NAME}_*.apk" | head -n1)"
+          if [ -z "$primary_apk" ]; then
+            primary_apk="$(find upload -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          fi
+          primary_ipk="${primary_ipk##*/}"
+          primary_apk="${primary_apk##*/}"
+
+          cat > upload/INSTALL.txt <<EOF
+          Offline install of generated OpenWrt packages
+          ============================================
+
+          If your router uses opkg (OpenWrt 23.05.x and older):
+            - upload / install the .ipk file
+            - LuCI upload supports .ipk packages
+            - SSH / USB install:
+                opkg install /tmp/${primary_ipk:-package.ipk}
+
+          If your router uses apk (OpenWrt 25.12.x and newer):
+            - upload / install the .apk file
+            - LuCI's Software page runs: apk add /tmp/upload.apk
+            - unsigned custom .apk files will fail there with UNTRUSTED signature
+            - SSH / USB install for unsigned test builds:
+                apk add --no-network --allow-untrusted /tmp/${primary_apk:-package.apk}
+            - for trusted installs, sign the .apk and copy the public key to /etc/apk/keys/
+
+          If the Software page shows "No packages" or index download errors:
+            - fix router network / DNS / firewall / time before expecting online repo installs
+          EOF
           
           echo "path=upload" >> $GITHUB_OUTPUT
 

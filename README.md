@@ -39,7 +39,7 @@ The **Build OpenWrt Package** workflow (`.github/workflows/build-openwrt-package
 compiles this repo with the official OpenWrt SDK and uploads an artifact containing:
 - installable `.ipk` package(s)
 - `SHA256SUMS`
-- `INSTALL.txt` (LuCI upload + `opkg` install instructions)
+- `INSTALL.txt` (explains when to use `.ipk` vs `.apk`, plus offline install commands)
 - converted `.apk` package(s) generated from the built `.ipk` files
 - APK `SHA256SUMS`
 
@@ -57,12 +57,16 @@ is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
 3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
    `INSTALL.txt`.
 4. For APK output, open `apk-packages-*` to get `*.apk` plus its `SHA256SUMS`.
+5. Read `INSTALL.txt` before uploading anything; it tells you which package format matches
+   your firmware and explains unsigned APK behavior.
 
 The APK artifact is produced by a post-build conversion step that runs only after
 successful IPK creation and validation. It uses the pinned converter fork
 `DomainDevelop/openwrt-ipk2apk` to convert each generated IPK into APK v2 format.
 
 ### Install offline on the router
+
+#### OpenWrt 23.05.x and older (`opkg`)
 
 **Option A — LuCI web upload (no SSH needed):**
 1. Log in to LuCI as admin.
@@ -76,6 +80,23 @@ opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 # if dependencies are missing and the router has internet:
 opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 ```
+
+#### OpenWrt 25.12.x and newer (`apk`)
+
+- Use the generated `.apk`, not the `.ipk`.
+- The LuCI Software page on apk-based firmware runs `apk add /tmp/upload.apk`.
+- If the uploaded APK is not signed by a key already trusted in `/etc/apk/keys/`, LuCI
+  will fail with `UNTRUSTED signature`.
+- For unsigned test builds over SSH / USB, install with:
+
+```sh
+apk add --no-network --allow-untrusted /tmp/luci-app-ginet-cellmodem_*.apk
+```
+
+- For production / trusted installs, sign the `.apk` and copy the matching public key to
+  `/etc/apk/keys/` on the router before installing.
+- If LuCI shows **No packages** or `packages.adb` download warnings, fix router network /
+  DNS / firewall / time first; apk repository indexes are not loading.
 
 Optionally verify integrity first with `sha256sum -c SHA256SUMS`.
 

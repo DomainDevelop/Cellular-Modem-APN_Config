@@ -135,22 +135,35 @@ jobs:
           PRIMARY_IPK="$(cd artifacts && ls ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
           test -n "$PRIMARY_IPK" || PRIMARY_IPK="$(cd artifacts && ls *.ipk | head -n1)"
           echo "primary_ipk=$PRIMARY_IPK" >> "$GITHUB_OUTPUT"
+          APK_FILE="${PRIMARY_IPK%.ipk}.apk"
           cat > artifacts/INSTALL.txt <<EOF
-          Offline install of $PRIMARY_IPK on an OpenWrt router
-          =====================================================
+          Offline install of $PRIMARY_IPK / $APK_FILE on an OpenWrt router
+          ================================================================
 
-          Option A - LuCI web upload (no SSH required):
-            1. Log in to LuCI (the router web UI) as admin.
-            2. Go to System -> Software.
-            3. Click "Upload Package..." and select the .ipk file from this artifact.
-            4. Confirm the install. Refresh LuCI; the new menu entry appears afterwards.
+          Choose the package format that matches your router firmware:
 
-          Option B - opkg over SSH / USB:
-            1. Copy the .ipk to the router (scp or USB storage), e.g. to /tmp.
-            2. Install it:
+          1. OpenWrt 23.05.x and older opkg-based systems:
+             - Use the .ipk package.
+             - LuCI upload works with the .ipk package.
+             - SSH / USB install:
                  opkg install /tmp/$PRIMARY_IPK
-            3. If dependencies are missing and the router has internet:
+               If dependencies are missing and the router has internet:
                  opkg update && opkg install /tmp/$PRIMARY_IPK
+
+          2. OpenWrt 25.12.x and newer apk-based systems:
+             - Use the .apk package.
+             - LuCI's Software page runs: apk add /tmp/upload.apk
+             - Unsigned custom .apk files will fail there with:
+                 UNTRUSTED signature
+             - For unsigned test builds over SSH / USB:
+                 apk add --no-network --allow-untrusted /tmp/$APK_FILE
+             - For trusted installs:
+                 copy your signing public key to /etc/apk/keys/
+                 then install the signed .apk package normally.
+
+          If the Software page shows "No packages" or download warnings:
+            - your apk repository indexes failed to download
+            - fix network / DNS / firewall / time first before expecting online dependency resolution
 
           Verify integrity before installing (optional):
             sha256sum -c SHA256SUMS
