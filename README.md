@@ -111,6 +111,7 @@ apk add --no-network --allow-untrusted /tmp/luci-app-ginet-cellmodem_*.apk
 Generate a persistent EC P-256 keypair **once** on any machine with OpenSSL:
 ```sh
 openssl ecparam -name prime256v1 -genkey -noout -out apk-signing-private.pem
+chmod 600 apk-signing-private.pem   # restrict access to the private key
 openssl ec -in apk-signing-private.pem -pubout -out apk-signing-public.pem
 ```
 
