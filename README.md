@@ -83,46 +83,67 @@ opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 
 #### OpenWrt 25.12.x and newer (`apk`) — trusted install
 
-When the **`APK_SIGNING_KEY` GitHub Actions secret is configured** (see below),
-the CI signs every `.apk` with ECDSA P-256 and includes `domaindevelop-cellmodem.ecdsa.pub`
-in the `apk-packages-*` artifact.
+The signing key pair for this repository has been generated.  The **public key**
+is committed at [`keys/domaindevelop-cellmodem.ecdsa.pub`](keys/domaindevelop-cellmodem.ecdsa.pub).
+Once the matching `APK_SIGNING_KEY` secret is added (see below), every CI build
+will produce signed APKs and include the same public key in the artifact.
 
-**One-time router setup (copy the public key once):**
+**One-time router setup — copy the public key once (USB or SSH/Ethernet):**
+
+*Over Ethernet (SSH/SCP):*
 ```sh
-scp domaindevelop-cellmodem.ecdsa.pub root@<ROUTER_IP>:/etc/apk/keys/
+# from your laptop in the same LAN
+scp keys/domaindevelop-cellmodem.ecdsa.pub root@<ROUTER_IP>:/etc/apk/keys/
 ```
 
-**Install the signed APK over SSH / USB:**
+*Via USB (no network needed):*
+```
+1. Copy keys/domaindevelop-cellmodem.ecdsa.pub to a USB stick.
+2. Plug the USB stick into the router.
+3. SSH into the router (or use the built-in terminal page), then:
+   mount /dev/sda1 /mnt  # or whichever device your USB appears as
+   cp /mnt/domaindevelop-cellmodem.ecdsa.pub /etc/apk/keys/
+   umount /mnt
+```
+
+**Install the signed APK:**
+
+*Over Ethernet (SSH/SCP):*
 ```sh
 scp luci-app-ginet-cellmodem_*.apk root@<ROUTER_IP>:/tmp/
 ssh root@<ROUTER_IP> "apk add --no-network /tmp/luci-app-ginet-cellmodem_*.apk"
 ```
 
-After the public key is trusted, future updates only require re-running the last
-two `scp` / `apk add` lines — no need to copy the key again.
+*Via USB (no network needed):*
+```
+1. Copy the .apk to a USB stick.
+2. Plug it into the router, mount it, then:
+   apk add --no-network /mnt/luci-app-ginet-cellmodem_*.apk
+   umount /mnt
+```
 
-**If `APK_SIGNING_KEY` is not configured (unsigned build)**, install with:
+After the public key is trusted once, future updates only require copying and
+installing the new `.apk` — no need to copy the key again.
+
+**If `APK_SIGNING_KEY` is not yet configured (unsigned build)**, install with:
 ```sh
 apk add --no-network --allow-untrusted /tmp/luci-app-ginet-cellmodem_*.apk
 ```
 
-#### Setting up APK package signing
+#### Setting up APK package signing (one-time secret setup)
 
-Generate a persistent EC P-256 keypair **once** on any machine with OpenSSL:
-```sh
-openssl ecparam -name prime256v1 -genkey -noout -out apk-signing-private.pem
-chmod 600 apk-signing-private.pem   # restrict access to the private key
-openssl ec -in apk-signing-private.pem -pubout -out apk-signing-public.pem
-```
+The key pair has already been generated. You only need to register the private key
+as a GitHub Actions secret so CI can sign every build automatically:
 
-Add the private key as a GitHub Actions secret:
-- Go to the repository **Settings → Secrets and variables → Actions**
-- Create a secret named **`APK_SIGNING_KEY`**
-- Paste the full PEM content of `apk-signing-private.pem` as the value
-
-The CI derives the public key from the secret during each build and includes it
-in the artifact (`domaindevelop-cellmodem.ecdsa.pub`).  Copy it to the router
-once; all subsequent signed builds will be installable without `--allow-untrusted`.
+1. Copy the private key PEM shown in the PR that introduced the `keys/` directory.
+2. Go to the repository **Settings → Secrets and variables → Actions**.
+3. Click **New repository secret**.
+4. Name: **`APK_SIGNING_KEY`**
+5. Value: paste the full `-----BEGIN EC PRIVATE KEY-----` … `-----END EC PRIVATE KEY-----` block.
+6. Click **Add secret**.
+7. Trigger a new build (push a commit or click **Actions → Build OpenWrt Package → Run workflow**).
+8. Download the `apk-packages-xe3000` artifact — it will contain the signed `.apk`
+   and `domaindevelop-cellmodem.ecdsa.pub` (identical to the file in `keys/`).
 
 - If LuCI shows **No packages** or `packages.adb` download warnings, fix router
   network / DNS / firewall / NTP first; apk repository indexes are not loading.

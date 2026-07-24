@@ -143,35 +143,66 @@ jobs:
 
           Choose the package format that matches your router firmware:
 
-          1. OpenWrt 23.05.x and older opkg-based systems:
-             - Use the .ipk package.
-             - LuCI upload works with the .ipk package.
-             - SSH / USB install:
-                 opkg install /tmp/$PRIMARY_IPK
-               If dependencies are missing and the router has internet:
-                 opkg update && opkg install /tmp/$PRIMARY_IPK
+          ── OpenWrt 23.05.x and older (opkg) ──────────────────────────────────
 
-          2. OpenWrt 25.12.x and newer apk-based systems:
-             - Use the .apk package from the apk-packages-* artifact.
-             - LuCI Software page runs: apk add /tmp/upload.apk
-             - Custom unsigned APKs are rejected there with UNTRUSTED signature.
+          Option A – LuCI web upload (no SSH needed):
+            1. Log in to LuCI → System → Software → Upload Package...
+            2. Select the .ipk file and confirm.
 
-             If the APK artifact contains a .ecdsa.pub file the package is SIGNED.
-             Trusted offline install (SSH / USB, one-time key setup):
-               a) Copy the public key to the router ONCE:
-                    scp domaindevelop-cellmodem.ecdsa.pub root@ROUTER:/etc/apk/keys/
-               b) Copy and install the APK:
-                    scp $APK_FILE root@ROUTER:/tmp/
-                    ssh root@ROUTER "apk add --no-network /tmp/$APK_FILE"
+          Option B – SSH/Ethernet:
+            scp $PRIMARY_IPK root@ROUTER:/tmp/
+            ssh root@ROUTER "opkg install /tmp/$PRIMARY_IPK"
 
-             If the APK is unsigned (APK_SIGNING_KEY secret not configured):
-               apk add --no-network --allow-untrusted /tmp/$APK_FILE
+          Option C – USB stick (no network):
+            Copy $PRIMARY_IPK to USB, plug into router, then:
+              mount /dev/sda1 /mnt
+              opkg install /mnt/$PRIMARY_IPK
+              umount /mnt
 
-          If the Software page shows "No packages" or index download errors:
-            - fix router network / DNS / firewall / NTP before expecting online installs.
+          ── OpenWrt 25.12.x and newer (apk) ───────────────────────────────────
+
+          Use the .apk file from the apk-packages-* artifact.
+
+          The public signing key is available at:
+            keys/domaindevelop-cellmodem.ecdsa.pub  (in the repository)
+          or inside this artifact as domaindevelop-cellmodem.ecdsa.pub
+          (only present when APK_SIGNING_KEY secret is configured).
+
+          SIGNED APK – Trusted offline install:
+
+            One-time key setup (do this once on the router):
+
+              Via SSH/Ethernet:
+                scp domaindevelop-cellmodem.ecdsa.pub root@ROUTER:/etc/apk/keys/
+
+              Via USB (no network):
+                Copy domaindevelop-cellmodem.ecdsa.pub to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  cp /mnt/domaindevelop-cellmodem.ecdsa.pub /etc/apk/keys/
+                  umount /mnt
+
+            Install the APK (after key is trusted):
+
+              Via SSH/Ethernet:
+                scp $APK_FILE root@ROUTER:/tmp/
+                ssh root@ROUTER "apk add --no-network /tmp/$APK_FILE"
+
+              Via USB (no network):
+                Copy $APK_FILE to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  apk add --no-network /mnt/$APK_FILE
+                  umount /mnt
+
+          UNSIGNED APK (APK_SIGNING_KEY secret not configured):
+            apk add --no-network --allow-untrusted /tmp/$APK_FILE
+
+          ──────────────────────────────────────────────────────────────────────
 
           Verify integrity before installing (optional):
             sha256sum -c SHA256SUMS
+
+          If the Software page shows "No packages" or index download errors:
+            - fix router network / DNS / firewall / NTP before expecting online installs.
           EOF
 
       - name: Validate generated package format
@@ -226,24 +257,35 @@ jobs:
 
       # Signs every APK with ECDSA P-256 / SHA-1 (APK v2 format).
       # Set the APK_SIGNING_KEY secret to a PEM EC private key to enable signing.
-      # The matching public key (domaindevelop-cellmodem.ecdsa.pub) is written into
-      # the artifact so users can copy it to /etc/apk/keys/ on their router once.
+      # The matching public key (domaindevelop-cellmodem.ecdsa.pub) is committed at
+      # keys/domaindevelop-cellmodem.ecdsa.pub in the repository and is always copied
+      # into the artifact so users can install it on their router even for unsigned builds.
       # If the secret is not configured the step is skipped and packages remain unsigned.
       - name: Sign APK packages (ECDSA P-256)
         env:
           APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          KEY_NAME="domaindevelop-cellmodem"
+          PUBKEY_REPO="$GITHUB_WORKSPACE/package-src/keys/${KEY_NAME}.ecdsa.pub"
+          PUBKEY_OUT="$GITHUB_WORKSPACE/apk-artifacts/${KEY_NAME}.ecdsa.pub"
+
+          # Always bundle the public key so users can set it up on the router
+          # regardless of whether this particular build is signed.
+          if [ -f "$PUBKEY_REPO" ]; then
+            cp "$PUBKEY_REPO" "$PUBKEY_OUT"
+            echo "Public key copied from repo: $PUBKEY_OUT"
+          fi
+
           if [ -z "${APK_SIGNING_KEY:-}" ]; then
             echo "::warning::APK_SIGNING_KEY secret is not configured."
             echo "::warning::APK packages will be unsigned. To install them on OpenWrt 25.12:"
             echo "::warning::  apk add --no-network --allow-untrusted /tmp/<package>.apk"
+            echo "::warning::See README 'Setting up APK package signing' for next steps."
             exit 0
           fi
 
-          KEY_NAME="domaindevelop-cellmodem"
           SIGNER="$GITHUB_WORKSPACE/package-src/.github/scripts/sign_apk.py"
-          PUBKEY_OUT="$GITHUB_WORKSPACE/apk-artifacts/${KEY_NAME}.ecdsa.pub"
 
           TMPKEY="$(mktemp)"
           trap 'rm -f "$TMPKEY"' EXIT
@@ -272,4 +314,5 @@ jobs:
             apk-artifacts/*.apk
             apk-artifacts/*.ecdsa.pub
             apk-artifacts/SHA256SUMS
+            artifacts/INSTALL.txt
           if-no-files-found: error

@@ -236,20 +236,32 @@ jobs:
 
       # 步骤 8b: 签名 APK (使用 ECDSA P-256 / SHA-1)
       # 设置 APK_SIGNING_KEY secret 以启用签名。未设置时跳过并输出警告。
+      # 公钥始终从仓库 keys/ 目录复制到输出，方便用户配置路由器。
       - name: Sign APK packages (ECDSA P-256)
         working-directory: ${{ env.SDK_DIR }}
         env:
           APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          KEY_NAME="domaindevelop-cellmodem"
+          PUBKEY_REPO="${{ github.workspace }}/keys/${KEY_NAME}.ecdsa.pub"
+          PUBKEY_OUT="output_apk/${KEY_NAME}.ecdsa.pub"
+
+          # Always copy the public key so it's available in the artifact
+          # even when the secret is not yet configured.
+          if [ -f "$PUBKEY_REPO" ]; then
+            cp "$PUBKEY_REPO" "$PUBKEY_OUT"
+            echo "Public key copied from repo: $PUBKEY_OUT"
+          fi
+
           if [ -z "${APK_SIGNING_KEY:-}" ]; then
             echo "::warning::APK_SIGNING_KEY secret is not configured."
             echo "::warning::APK packages will be unsigned. To install on OpenWrt 25.12:"
             echo "::warning::  apk add --no-network --allow-untrusted /tmp/<package>.apk"
+            echo "::warning::See README 'Setting up APK package signing' for next steps."
             exit 0
           fi
 
-          KEY_NAME="domaindevelop-cellmodem"
           SIGNER="${{ github.workspace }}/.github/scripts/sign_apk.py"
           test -f "$SIGNER" || { echo "::error::sign_apk.py not found: $SIGNER"; exit 1; }
 
@@ -269,7 +281,7 @@ jobs:
             echo "Signing: $(basename "$apk")"
             if [ "$FIRST" = true ]; then
               python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" \
-                --pubkey "output_apk/${KEY_NAME}.ecdsa.pub" "$apk"
+                --pubkey "$PUBKEY_OUT" "$apk"
               FIRST=false
             else
               python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" "$apk"
@@ -326,32 +338,64 @@ jobs:
           Offline install of generated OpenWrt packages
           ============================================
 
-          If your router uses opkg (OpenWrt 23.05.x and older):
-            - upload / install the .ipk file
-            - LuCI upload supports .ipk packages
-            - SSH / USB install:
-                opkg install /tmp/${primary_ipk:-package.ipk}
+          ── OpenWrt 23.05.x and older (opkg) ──────────────────────────────────
 
-          If your router uses apk (OpenWrt 25.12.x and newer):
-            - Use the .apk file.
-            - LuCI's Software page runs: apk add /tmp/upload.apk
-            - Custom unsigned APKs are rejected there with UNTRUSTED signature.
+          Option A – LuCI web upload (no SSH needed):
+            1. Log in to LuCI → System → Software → Upload Package...
+            2. Select the .ipk file and confirm.
+
+          Option B – SSH/Ethernet:
+            scp ${primary_ipk:-package.ipk} root@ROUTER:/tmp/
+            ssh root@ROUTER "opkg install /tmp/${primary_ipk:-package.ipk}"
+
+          Option C – USB stick (no network):
+            Copy ${primary_ipk:-package.ipk} to USB, plug into router, then:
+              mount /dev/sda1 /mnt
+              opkg install /mnt/${primary_ipk:-package.ipk}
+              umount /mnt
+
+          ── OpenWrt 25.12.x and newer (apk) ───────────────────────────────────
+
+          The public signing key is at keys/domaindevelop-cellmodem.ecdsa.pub
+          in the repository (or inside this artifact when signing is enabled).
 
           EOF
 
           if [ "$signed" = "yes" ]; then
             cat >> upload/INSTALL.txt <<EOF
-            This APK is SIGNED. Trusted offline install:
-              a) Copy the public key to the router ONCE:
-                   scp domaindevelop-cellmodem.ecdsa.pub root@ROUTER:/etc/apk/keys/
-              b) Copy and install the APK:
-                   scp ${primary_apk:-package.apk} root@ROUTER:/tmp/
-                   ssh root@ROUTER "apk add --no-network /tmp/${primary_apk:-package.apk}"
+          SIGNED APK – Trusted offline install:
+
+            One-time key setup (copy public key to router once):
+
+              Via SSH/Ethernet:
+                scp domaindevelop-cellmodem.ecdsa.pub root@ROUTER:/etc/apk/keys/
+
+              Via USB (no network):
+                Copy domaindevelop-cellmodem.ecdsa.pub to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  cp /mnt/domaindevelop-cellmodem.ecdsa.pub /etc/apk/keys/
+                  umount /mnt
+
+            Install the APK (after key is trusted):
+
+              Via SSH/Ethernet:
+                scp ${primary_apk:-package.apk} root@ROUTER:/tmp/
+                ssh root@ROUTER "apk add --no-network /tmp/${primary_apk:-package.apk}"
+
+              Via USB (no network):
+                Copy ${primary_apk:-package.apk} to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  apk add --no-network /mnt/${primary_apk:-package.apk}
+                  umount /mnt
           EOF
           else
             cat >> upload/INSTALL.txt <<EOF
-            This APK is UNSIGNED (APK_SIGNING_KEY secret not configured).
-            Install with:  apk add --no-network --allow-untrusted /tmp/${primary_apk:-package.apk}
+          UNSIGNED APK (APK_SIGNING_KEY secret not configured).
+          Install with:
+            apk add --no-network --allow-untrusted /tmp/${primary_apk:-package.apk}
+
+          To enable signed builds, see the "Setting up APK package signing" section
+          of the repository README.
           EOF
           fi
 
