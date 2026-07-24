@@ -15,6 +15,12 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Pinned commit of DomainDevelop/openwrt-ipk2apk used to convert IPK to APK.
+  # Update this SHA when you want to pull in upstream converter changes.
+  # Pinned to: main branch HEAD as of 2026-07-23 (adds APK v2 PAX SHA1 support)
+  IPK2APK_CONVERTER_REF: "60caa88a2c5907dc76884b58742304161d644480"
+
 jobs:
   build:
     name: build (${{ matrix.target_name }})
@@ -44,7 +50,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses-dev libssl-dev python3-setuptools rsync swig \
-            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates
+            unzip zlib1g-dev file wget jq xz-utils zstd ca-certificates \
+            python3-cryptography
 
       - name: Cache OpenWrt SDK
         id: cache-sdk
@@ -129,25 +136,73 @@ jobs:
           PRIMARY_IPK="$(cd artifacts && ls ${{ steps.pkg.outputs.pkg_name }}_*.ipk 2>/dev/null | head -n1)"
           test -n "$PRIMARY_IPK" || PRIMARY_IPK="$(cd artifacts && ls *.ipk | head -n1)"
           echo "primary_ipk=$PRIMARY_IPK" >> "$GITHUB_OUTPUT"
+          APK_FILE="${PRIMARY_IPK%.ipk}.apk"
           cat > artifacts/INSTALL.txt <<EOF
-          Offline install of $PRIMARY_IPK on an OpenWrt router
-          =====================================================
+          Offline install of $PRIMARY_IPK / $APK_FILE on an OpenWrt router
+          ================================================================
 
-          Option A - LuCI web upload (no SSH required):
-            1. Log in to LuCI (the router web UI) as admin.
-            2. Go to System -> Software.
-            3. Click "Upload Package..." and select the .ipk file from this artifact.
-            4. Confirm the install. Refresh LuCI; the new menu entry appears afterwards.
+          Choose the package format that matches your router firmware:
 
-          Option B - opkg over SSH / USB:
-            1. Copy the .ipk to the router (scp or USB storage), e.g. to /tmp.
-            2. Install it:
-                 opkg install /tmp/$PRIMARY_IPK
-            3. If dependencies are missing and the router has internet:
-                 opkg update && opkg install /tmp/$PRIMARY_IPK
+          ── OpenWrt 23.05.x and older (opkg) ──────────────────────────────────
+
+          Option A – LuCI web upload (no SSH needed):
+            1. Log in to LuCI → System → Software → Upload Package...
+            2. Select the .ipk file and confirm.
+
+          Option B – SSH/Ethernet:
+            scp $PRIMARY_IPK root@ROUTER:/tmp/
+            ssh root@ROUTER "opkg install /tmp/$PRIMARY_IPK"
+
+          Option C – USB stick (no network):
+            Copy $PRIMARY_IPK to USB, plug into router, then:
+              mount /dev/sda1 /mnt
+              opkg install /mnt/$PRIMARY_IPK
+              umount /mnt
+
+          ── OpenWrt 25.12.x and newer (apk) ───────────────────────────────────
+
+          Use the .apk file from the apk-packages-* artifact.
+
+          The public signing key is available at:
+            keys/domaindevelop-cellmodem.ecdsa.pub  (in the repository)
+          or inside this artifact as domaindevelop-cellmodem.ecdsa.pub
+          (only present when APK_SIGNING_KEY secret is configured).
+
+          SIGNED APK – Trusted offline install:
+
+            One-time key setup (do this once on the router):
+
+              Via SSH/Ethernet:
+                scp domaindevelop-cellmodem.ecdsa.pub root@ROUTER:/etc/apk/keys/
+
+              Via USB (no network):
+                Copy domaindevelop-cellmodem.ecdsa.pub to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  cp /mnt/domaindevelop-cellmodem.ecdsa.pub /etc/apk/keys/
+                  umount /mnt
+
+            Install the APK (after key is trusted):
+
+              Via SSH/Ethernet:
+                scp $APK_FILE root@ROUTER:/tmp/
+                ssh root@ROUTER "apk add --no-network /tmp/$APK_FILE"
+
+              Via USB (no network):
+                Copy $APK_FILE to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  apk add --no-network /mnt/$APK_FILE
+                  umount /mnt
+
+          UNSIGNED APK (APK_SIGNING_KEY secret not configured):
+            apk add --no-network --allow-untrusted /tmp/$APK_FILE
+
+          ──────────────────────────────────────────────────────────────────────
 
           Verify integrity before installing (optional):
             sha256sum -c SHA256SUMS
+
+          If the Software page shows "No packages" or index download errors:
+            - fix router network / DNS / firewall / NTP before expecting online installs.
           EOF
 
       - name: Validate generated package format
@@ -169,5 +224,95 @@ jobs:
           path: |
             artifacts/*.ipk
             artifacts/SHA256SUMS
+            artifacts/INSTALL.txt
+          if-no-files-found: error
+
+      - name: Checkout IPK to APK converter
+        uses: actions/checkout@v5
+        with:
+          repository: DomainDevelop/openwrt-ipk2apk
+          ref: ${{ env.IPK2APK_CONVERTER_REF }}
+          path: converter-src
+
+      - name: Convert .ipk artifacts to .apk (v2)
+        run: |
+          set -euo pipefail
+          CONVERTER="$GITHUB_WORKSPACE/converter-src/openwrt-ipk2apk.py"
+          test -f "$CONVERTER" || { echo "::error::Converter script not found at $CONVERTER"; exit 1; }
+          mkdir -p apk-artifacts
+          shopt -s nullglob
+          IPK_FILES=(artifacts/*.ipk)
+          test "${#IPK_FILES[@]}" -gt 0 || { echo "::error::No .ipk files found for conversion in artifacts/"; exit 1; }
+          for ipk in "${IPK_FILES[@]}"; do
+            base_name="$(basename "$ipk" .ipk)"
+            apk_out="$GITHUB_WORKSPACE/apk-artifacts/${base_name}.apk"
+            echo "Converting '$ipk' -> '$apk_out'"
+            python3 "$CONVERTER" "$ipk" -o "$apk_out"
+            test -s "$apk_out" || { echo "::error::Conversion produced an empty or missing APK: $apk_out"; exit 1; }
+          done
+          mapfile -t APK_FILES < <(find apk-artifacts -type f -name '*.apk' -size +0c | sort)
+          test "${#APK_FILES[@]}" -gt 0 || { echo "::error::No non-empty .apk files were produced"; exit 1; }
+          printf '%s\n' "${APK_FILES[@]}"
+          ( cd apk-artifacts && sha256sum *.apk > SHA256SUMS )
+
+      # Signs every APK with ECDSA P-256 / SHA-1 (APK v2 format).
+      # Set the APK_SIGNING_KEY secret to a PEM EC private key to enable signing.
+      # The matching public key (domaindevelop-cellmodem.ecdsa.pub) is committed at
+      # keys/domaindevelop-cellmodem.ecdsa.pub in the repository and is always copied
+      # into the artifact so users can install it on their router even for unsigned builds.
+      # If the secret is not configured the step is skipped and packages remain unsigned.
+      - name: Sign APK packages (ECDSA P-256)
+        env:
+          APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          KEY_NAME="domaindevelop-cellmodem"
+          PUBKEY_REPO="$GITHUB_WORKSPACE/package-src/keys/${KEY_NAME}.ecdsa.pub"
+          PUBKEY_OUT="$GITHUB_WORKSPACE/apk-artifacts/${KEY_NAME}.ecdsa.pub"
+
+          # Always bundle the public key so users can set it up on the router
+          # regardless of whether this particular build is signed.
+          if [ -f "$PUBKEY_REPO" ]; then
+            cp "$PUBKEY_REPO" "$PUBKEY_OUT"
+            echo "Public key copied from repo: $PUBKEY_OUT"
+          fi
+
+          if [ -z "${APK_SIGNING_KEY:-}" ]; then
+            echo "::warning::APK_SIGNING_KEY secret is not configured."
+            echo "::warning::APK packages will be unsigned. To install them on OpenWrt 25.12:"
+            echo "::warning::  apk add --no-network --allow-untrusted /tmp/<package>.apk"
+            echo "::warning::See README 'Setting up APK package signing' for next steps."
+            exit 0
+          fi
+
+          SIGNER="$GITHUB_WORKSPACE/package-src/.github/scripts/sign_apk.py"
+
+          TMPKEY="$(mktemp)"
+          trap 'rm -f "$TMPKEY"' EXIT
+          printf '%s' "$APK_SIGNING_KEY" > "$TMPKEY"
+
+          FIRST=true
+          for apk in "$GITHUB_WORKSPACE/apk-artifacts/"*.apk; do
+            echo "Signing: $(basename "$apk")"
+            if [ "$FIRST" = true ]; then
+              python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" \
+                --pubkey "$PUBKEY_OUT" "$apk"
+              FIRST=false
+            else
+              python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" "$apk"
+            fi
+          done
+
+          echo "Public key written: $PUBKEY_OUT"
+          echo "Install on router: scp ${KEY_NAME}.ecdsa.pub root@ROUTER:/etc/apk/keys/"
+
+      - name: Upload .apk artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: apk-packages-${{ matrix.target_name }}
+          path: |
+            apk-artifacts/*.apk
+            apk-artifacts/*.ecdsa.pub
+            apk-artifacts/SHA256SUMS
             artifacts/INSTALL.txt
           if-no-files-found: error

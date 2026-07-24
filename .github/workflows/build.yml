@@ -30,6 +30,11 @@ env:
   # 3. Specify the SDK save directory, generally without modification.
   # 3. 指定SDK保存目录，一般不用修改
   SDK_DIR: /home/runner/work/openwrt-sdk
+
+  # 4. Pinned commit of DomainDevelop/openwrt-ipk2apk used to convert IPK to APK.
+  #    Update this SHA when you want to pull in upstream converter changes.
+  #    Pinned to: main branch HEAD as of 2026-07-23 (adds APK v2 PAX SHA1 support)
+  IPK2APK_CONVERTER_REF: "60caa88a2c5907dc76884b58742304161d644480"
 # ======================================================================================
 # ==                        👆 User configuration area 👆                            ==
 # ======================================================================================
@@ -63,7 +68,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential rsync unzip zstd
+          sudo apt-get install -y build-essential rsync unzip zstd python3-cryptography
 
       # 步骤 3: 缓存 OpenWrt SDK
       # 缓存已下载和初步设置好的 SDK 目录。
@@ -197,37 +202,99 @@ jobs:
           translation_pkg=${PACKAGE_NAME#luci-app-}
           find ./bin/packages -type f \( -name "${PACKAGE_NAME}*.ipk" -o -name "luci-i18n-${translation_pkg}-*.ipk" \) -exec cp {} output_ipk/ \;
 
-      # 步骤 7: 编译软件包 (APK)
-      - name: Compile the package (APK)
+      # 步骤 7: 检出 IPK 转 APK 转换器
+      - name: Checkout IPK to APK converter
+        uses: actions/checkout@v5
+        with:
+          repository: DomainDevelop/openwrt-ipk2apk
+          ref: ${{ env.IPK2APK_CONVERTER_REF }}
+          path: converter-src
+
+      # 步骤 8: 将 IPK 转换为 APK (使用 openwrt-ipk2apk)
+      - name: Convert IPK packages to APK
         working-directory: ${{ env.SDK_DIR }}
         run: |
-          make package/${PACKAGE_NAME}/clean
-          
-          translation_pkg=${PACKAGE_NAME#luci-app-}
-          {
-            echo "CONFIG_PACKAGE_${PACKAGE_NAME}=m"
-            echo "CONFIG_PACKAGE_luci-i18n-${translation_pkg}-zh-cn=m"
-            echo "CONFIG_LUCI_LANG_zh_Hans=y"
-            echo "CONFIG_USE_APK=y"
-            echo "CONFIG_USE_OPKG=n"
-          } > .config
-          make defconfig
-          
-          if ! grep -q '^CONFIG_USE_APK=y' .config; then
-            echo "CONFIG_USE_APK not available in this SDK. Skipping APK build."
+          set -euo pipefail
+          CONVERTER="${{ github.workspace }}/converter-src/openwrt-ipk2apk.py"
+          test -f "$CONVERTER" || { echo "::error::Converter script not found at $CONVERTER"; exit 1; }
+          mkdir -p output_apk
+          shopt -s nullglob
+          IPK_FILES=(output_ipk/*.ipk)
+          if [ "${#IPK_FILES[@]}" -eq 0 ]; then
+            echo "::warning::No .ipk files found in output_ipk/; skipping APK conversion"
+          else
+            for ipk in "${IPK_FILES[@]}"; do
+              base_name="$(basename "$ipk" .ipk)"
+              apk_out="output_apk/${base_name}.apk"
+              echo "Converting '$ipk' -> '$apk_out'"
+              python3 "$CONVERTER" "$ipk" -o "$apk_out"
+              test -s "$apk_out" || { echo "::error::Conversion produced an empty or missing APK: $apk_out"; exit 1; }
+            done
+            echo "APK conversion complete:"
+            ls -l output_apk/
+          fi
+
+      # 步骤 8b: 签名 APK (使用 ECDSA P-256 / SHA-1)
+      # 设置 APK_SIGNING_KEY secret 以启用签名。未设置时跳过并输出警告。
+      # 公钥始终从仓库 keys/ 目录复制到输出，方便用户配置路由器。
+      - name: Sign APK packages (ECDSA P-256)
+        working-directory: ${{ env.SDK_DIR }}
+        env:
+          APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          KEY_NAME="domaindevelop-cellmodem"
+          PUBKEY_REPO="${{ github.workspace }}/keys/${KEY_NAME}.ecdsa.pub"
+          PUBKEY_OUT="output_apk/${KEY_NAME}.ecdsa.pub"
+
+          # Always copy the public key so it's available in the artifact
+          # even when the secret is not yet configured.
+          if [ -f "$PUBKEY_REPO" ]; then
+            cp "$PUBKEY_REPO" "$PUBKEY_OUT"
+            echo "Public key copied from repo: $PUBKEY_OUT"
+          fi
+
+          if [ -z "${APK_SIGNING_KEY:-}" ]; then
+            echo "::warning::APK_SIGNING_KEY secret is not configured."
+            echo "::warning::APK packages will be unsigned. To install on OpenWrt 25.12:"
+            echo "::warning::  apk add --no-network --allow-untrusted /tmp/<package>.apk"
+            echo "::warning::See README 'Setting up APK package signing' for next steps."
             exit 0
           fi
 
-          make package/${PACKAGE_NAME}/compile V=s -j$(($(nproc) + 1))
-          
-          mkdir -p output_apk
-          find ./bin/packages -type f \( -name "${PACKAGE_NAME}*.apk" -o -name "luci-i18n-${translation_pkg}-*.apk" \) -exec cp {} output_apk/ \;
+          SIGNER="${{ github.workspace }}/.github/scripts/sign_apk.py"
+          test -f "$SIGNER" || { echo "::error::sign_apk.py not found: $SIGNER"; exit 1; }
 
-      # 步骤 8: 收集和准备文件
+          shopt -s nullglob
+          APK_FILES=(output_apk/*.apk)
+          if [ "${#APK_FILES[@]}" -eq 0 ]; then
+            echo "::warning::No APK files to sign; skipping."
+            exit 0
+          fi
+
+          TMPKEY="$(mktemp)"
+          trap 'rm -f "$TMPKEY"' EXIT
+          printf '%s' "$APK_SIGNING_KEY" > "$TMPKEY"
+
+          FIRST=true
+          for apk in "${APK_FILES[@]}"; do
+            echo "Signing: $(basename "$apk")"
+            if [ "$FIRST" = true ]; then
+              python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" \
+                --pubkey "$PUBKEY_OUT" "$apk"
+              FIRST=false
+            else
+              python3 "$SIGNER" --key "$TMPKEY" --key-name "$KEY_NAME" "$apk"
+            fi
+          done
+          echo "All APKs signed."
+
+      # 步骤 9: 收集和准备文件
       - name: Collect artifacts
         id: collect_artifacts
         working-directory: ${{ env.SDK_DIR }}
         run: |
+          set -euo pipefail
           rm -rf upload
           mkdir -p upload
           
@@ -238,6 +305,8 @@ jobs:
           if [ -d "output_apk" ]; then
             echo "Copying APK files..."
             cp output_apk/*.apk upload/ 2>/dev/null || true
+            # Include public key if signing was performed
+            cp output_apk/*.ecdsa.pub upload/ 2>/dev/null || true
           fi
           
           if [ -z "$(ls -A upload)" ]; then
@@ -248,10 +317,97 @@ jobs:
           
           echo "Found packages:"
           ls -l upload/
+
+          primary_ipk="$(find upload -maxdepth 1 -type f -name "${PACKAGE_NAME}_*.ipk" | head -n1)"
+          if [ -z "$primary_ipk" ]; then
+            primary_ipk="$(find upload -maxdepth 1 -type f -name '*.ipk' | head -n1)"
+          fi
+          primary_apk="$(find upload -maxdepth 1 -type f -name "${PACKAGE_NAME}_*.apk" | head -n1)"
+          if [ -z "$primary_apk" ]; then
+            primary_apk="$(find upload -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          fi
+          primary_ipk="${primary_ipk##*/}"
+          primary_apk="${primary_apk##*/}"
+
+          signed=""
+          if ls upload/*.ecdsa.pub >/dev/null 2>&1; then
+            signed="yes"
+          fi
+
+          cat > upload/INSTALL.txt <<EOF
+          Offline install of generated OpenWrt packages
+          ============================================
+
+          ── OpenWrt 23.05.x and older (opkg) ──────────────────────────────────
+
+          Option A – LuCI web upload (no SSH needed):
+            1. Log in to LuCI → System → Software → Upload Package...
+            2. Select the .ipk file and confirm.
+
+          Option B – SSH/Ethernet:
+            scp ${primary_ipk:-package.ipk} root@ROUTER:/tmp/
+            ssh root@ROUTER "opkg install /tmp/${primary_ipk:-package.ipk}"
+
+          Option C – USB stick (no network):
+            Copy ${primary_ipk:-package.ipk} to USB, plug into router, then:
+              mount /dev/sda1 /mnt
+              opkg install /mnt/${primary_ipk:-package.ipk}
+              umount /mnt
+
+          ── OpenWrt 25.12.x and newer (apk) ───────────────────────────────────
+
+          The public signing key is at keys/domaindevelop-cellmodem.ecdsa.pub
+          in the repository (or inside this artifact when signing is enabled).
+
+          EOF
+
+          if [ "$signed" = "yes" ]; then
+            cat >> upload/INSTALL.txt <<EOF
+          SIGNED APK – Trusted offline install:
+
+            One-time key setup (copy public key to router once):
+
+              Via SSH/Ethernet:
+                scp domaindevelop-cellmodem.ecdsa.pub root@ROUTER:/etc/apk/keys/
+
+              Via USB (no network):
+                Copy domaindevelop-cellmodem.ecdsa.pub to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  cp /mnt/domaindevelop-cellmodem.ecdsa.pub /etc/apk/keys/
+                  umount /mnt
+
+            Install the APK (after key is trusted):
+
+              Via SSH/Ethernet:
+                scp ${primary_apk:-package.apk} root@ROUTER:/tmp/
+                ssh root@ROUTER "apk add --no-network /tmp/${primary_apk:-package.apk}"
+
+              Via USB (no network):
+                Copy ${primary_apk:-package.apk} to USB, then on router:
+                  mount /dev/sda1 /mnt
+                  apk add --no-network /mnt/${primary_apk:-package.apk}
+                  umount /mnt
+          EOF
+          else
+            cat >> upload/INSTALL.txt <<EOF
+          UNSIGNED APK (APK_SIGNING_KEY secret not configured).
+          Install with:
+            apk add --no-network --allow-untrusted /tmp/${primary_apk:-package.apk}
+
+          To enable signed builds, see the "Setting up APK package signing" section
+          of the repository README.
+          EOF
+          fi
+
+          cat >> upload/INSTALL.txt <<EOF
+
+          If the Software page shows "No packages" or index download errors:
+            - fix router network / DNS / firewall / NTP before expecting online installs.
+          EOF
           
           echo "path=upload" >> $GITHUB_OUTPUT
 
-      # 步骤 9: 上传构建产物
+      # 步骤 10: 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
