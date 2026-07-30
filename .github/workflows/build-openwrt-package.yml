@@ -399,11 +399,49 @@ jobs:
             exit 1
           fi
 
+          REQUIRED_FIRST_DEPS=(libubox libuci-lua)
+          for core_dep in "${REQUIRED_FIRST_DEPS[@]}"; do
+            if ! ls "${DEPS_DIR}/${core_dep}-"*.apk >/dev/null 2>&1; then
+              echo "::error::Required core dependency APK missing from bundle: ${core_dep}"
+              exit 1
+            fi
+          done
+
+          mapfile -t BUNDLED_DEP_APKS < <(find "$DEPS_DIR" -maxdepth 1 -type f -name '*.apk' | sort)
+          CORE_APKS=()
+          OTHER_APKS=()
+          for dep_apk in "${BUNDLED_DEP_APKS[@]}"; do
+            dep_base="$(basename "$dep_apk")"
+            if [[ "$dep_base" == libubox-* ]] || [[ "$dep_base" == libuci-lua-* ]]; then
+              CORE_APKS+=("$dep_apk")
+            else
+              OTHER_APKS+=("$dep_apk")
+            fi
+          done
+
+          core_install_cmd="apk add --no-network"
+          for dep_apk in "${CORE_APKS[@]}"; do
+            core_install_cmd+=" /mnt/deps/$(basename "$dep_apk")"
+          done
+          rest_install_cmd="apk add --no-network"
+          for dep_apk in "${OTHER_APKS[@]}"; do
+            rest_install_cmd+=" /mnt/deps/$(basename "$dep_apk")"
+          done
+          rest_install_line="$rest_install_cmd"
+          if [ "${#OTHER_APKS[@]}" -eq 0 ]; then
+            rest_install_line="echo 'No additional dependency APKs beyond libubox/libuci-lua.'"
+          fi
+          unsigned_install_cmd="apk add --no-network --allow-untrusted"
+          for dep_apk in "${BUNDLED_DEP_APKS[@]}"; do
+            unsigned_install_cmd+=" /mnt/deps/$(basename "$dep_apk")"
+          done
+
           app_apk_name="${{ steps.collect.outputs.primary_ipk }}"
           app_apk_name="${app_apk_name%.ipk}.apk"
           if [ ! -f "${APP_DIR}/${app_apk_name}" ]; then
             app_apk_name="$(basename "${APP_APKS[0]}")"
           fi
+          unsigned_install_cmd+=" /mnt/app/${app_apk_name}"
           has_pubkey="no"
           if [ -f "${BUNDLE_DIR}/${KEY_NAME}.ecdsa.pub" ]; then
             has_pubkey="yes"
@@ -414,23 +452,25 @@ jobs:
           ===============================================
 
           This bundle contains:
-          - app/*.apk   (luci-app-ginet-cellmodem APKs from this build)
+          - app/*.apk   (luci-app-ginet-cellmodem APKs from this build; no dependency APKs inside)
           - deps/*.apk  (required runtime dependency APKs for OpenWrt ${APK_RELEASE})
           - ${KEY_NAME}.ecdsa.pub (when available)
 
           Install order (offline):
             1) Trust key once on router (signed builds):
                cp ${KEY_NAME}.ecdsa.pub /etc/apk/keys/
-            2) Install dependencies first:
-               apk add --no-network /mnt/deps/*.apk
-            3) Install the app package:
+            2) Install core dependencies FIRST (required before app install):
+               ${core_install_cmd}
+            3) Install remaining dependency APKs:
+               ${rest_install_line}
+            4) Install the app package:
                apk add --no-network /mnt/app/${app_apk_name}
 
-          Single command alternative (installs deps + app together):
-            apk add --no-network /mnt/deps/*.apk /mnt/app/${app_apk_name}
+          Install everything in one command (order-safe because core deps are explicit first):
+            ${core_install_cmd} && ${rest_install_line} && apk add --no-network /mnt/app/${app_apk_name}
 
           If your build is unsigned:
-            apk add --no-network --allow-untrusted /mnt/deps/*.apk /mnt/app/${app_apk_name}
+            ${unsigned_install_cmd}
           EOF
 
           if [ "$has_pubkey" = "no" ]; then

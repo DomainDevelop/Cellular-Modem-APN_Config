@@ -137,19 +137,27 @@ installing the new `.apk` — no need to copy the key again.
 **Path B — full offline bundle install (dependencies not preinstalled):**
 1. Download and extract `apk-offline-bundle-*`.
 2. Copy the extracted folder to USB (or SCP to router).
-3. Install dependencies first, then app:
+3. Install dependencies first, with `libubox` and `libuci-lua` before app:
 ```sh
+apk add --no-network /mnt/deps/libubox-*.apk /mnt/deps/libuci-lua-*.apk
 apk add --no-network /mnt/deps/*.apk
 apk add --no-network /mnt/app/luci-app-ginet-cellmodem_*.apk
 ```
-You can also install both in one command:
+The `luci-app-ginet-cellmodem` APK remains separate; dependency APKs are bundled in
+the same offline artifact under `deps/` (not embedded inside the app APK).
+
+You can also run a single order-safe chain:
 ```sh
-apk add --no-network /mnt/deps/*.apk /mnt/app/luci-app-ginet-cellmodem_*.apk
+apk add --no-network /mnt/deps/libubox-*.apk /mnt/deps/libuci-lua-*.apk && \
+apk add --no-network /mnt/deps/*.apk && \
+apk add --no-network /mnt/app/luci-app-ginet-cellmodem_*.apk
 ```
 
 **If `APK_SIGNING_KEY` is not yet configured (unsigned build)**, add `--allow-untrusted`:
 ```sh
-apk add --no-network --allow-untrusted /mnt/deps/*.apk /mnt/app/luci-app-ginet-cellmodem_*.apk
+apk add --no-network --allow-untrusted /mnt/deps/libubox-*.apk /mnt/deps/libuci-lua-*.apk && \
+apk add --no-network --allow-untrusted /mnt/deps/*.apk && \
+apk add --no-network --allow-untrusted /mnt/app/luci-app-ginet-cellmodem_*.apk
 ```
 
 #### Setting up APK package signing (one-time secret setup)
