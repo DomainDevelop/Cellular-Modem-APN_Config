@@ -134,12 +134,11 @@ ssh root@<ROUTER_IP> "apk add --no-network /tmp/luci-app-ginet-cellmodem_*.apk"
 After the public key is trusted once, future updates only require copying and
 installing the new `.apk` — no need to copy the key again.
 
-**Path B — full offline bundle install (dependencies not preinstalled):**
+**Path B — full offline bundle install (when target firmware is missing required runtime packages):**
 1. Download and extract `apk-offline-bundle-*`.
 2. Copy the extracted folder to USB (or SCP to router).
-3. Install dependencies first, with `libubox` and `libuci-lua` before app:
+3. Install dependency bundle first, then install the app:
 ```sh
-apk add --no-network /mnt/deps/libubox-*.apk /mnt/deps/libuci-lua-*.apk
 apk add --no-network /mnt/deps/*.apk
 apk add --no-network /mnt/app/luci-app-ginet-cellmodem_*.apk
 ```
@@ -148,14 +147,12 @@ the same offline artifact under `deps/` (not embedded inside the app APK).
 
 You can also run a single order-safe chain:
 ```sh
-apk add --no-network /mnt/deps/libubox-*.apk /mnt/deps/libuci-lua-*.apk && \
 apk add --no-network /mnt/deps/*.apk && \
 apk add --no-network /mnt/app/luci-app-ginet-cellmodem_*.apk
 ```
 
 **If `APK_SIGNING_KEY` is not yet configured (unsigned build)**, add `--allow-untrusted`:
 ```sh
-apk add --no-network --allow-untrusted /mnt/deps/libubox-*.apk /mnt/deps/libuci-lua-*.apk && \
 apk add --no-network --allow-untrusted /mnt/deps/*.apk && \
 apk add --no-network --allow-untrusted /mnt/app/luci-app-ginet-cellmodem_*.apk
 ```
@@ -203,5 +200,5 @@ make package/luci-app-ginet-cellmodem/compile V=s
 
 ## Package Dependencies
 
-- Base LuCI/app runtime: `luci-base`, `libuci-lua`, `libubox`, `uqmi`, `kmod-usb-net-qmi-wwan`
+- Base LuCI/app runtime: `luci-base`, `uqmi`, `kmod-usb-net-qmi-wwan`
 - VPN/WireGuard: `wireguard-tools`, `kmod-wireguard`, `kmod-crypto-lib-chacha20poly1305`, `kmod-crypto-lib-curve25519`
