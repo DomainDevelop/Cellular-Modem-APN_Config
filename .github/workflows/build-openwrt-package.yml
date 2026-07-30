@@ -32,6 +32,7 @@ jobs:
           # Default, XE-3000 class target (OpenWrt 23.05.5 mediatek/filogic).
           - target_name: xe3000
             openwrt_version: "23.05.5"
+            apk_release: "25.12.5"
             target: "mediatek"
             subtarget: "filogic"
             pkg_arch: "aarch64_cortex-a53"
@@ -161,7 +162,11 @@ jobs:
 
           ── OpenWrt 25.12.x and newer (apk) ───────────────────────────────────
 
-          Use the .apk file from the apk-packages-* artifact.
+          Use the .apk file from the apk-packages-* artifact when dependencies
+          are already installed on the router.
+
+          For fully-offline install on a router without package indexes/cache,
+          use the apk-offline-bundle-* artifact (contains app APK + dependencies).
 
           The public signing key is available at:
             keys/domaindevelop-cellmodem.ecdsa.pub  (in the repository)
@@ -306,6 +311,141 @@ jobs:
           echo "Public key written: $PUBKEY_OUT"
           echo "Install on router: scp ${KEY_NAME}.ecdsa.pub root@ROUTER:/etc/apk/keys/"
 
+      - name: Assemble offline APK dependency bundle
+        run: |
+          set -euo pipefail
+          KEY_NAME="domaindevelop-cellmodem"
+          PKG_MAKEFILE="$GITHUB_WORKSPACE/${{ steps.pkg.outputs.pkg_dir }}/Makefile"
+          BUNDLE_DIR="$GITHUB_WORKSPACE/apk-offline-bundle"
+          APP_DIR="$BUNDLE_DIR/app"
+          DEPS_DIR="$BUNDLE_DIR/deps"
+          mkdir -p "$APP_DIR" "$DEPS_DIR"
+
+          shopt -s nullglob
+          APP_APKS=("$GITHUB_WORKSPACE/apk-artifacts/"*.apk)
+          test "${#APP_APKS[@]}" -gt 0 || { echo "::error::No app APK files found to bundle"; exit 1; }
+          cp "${APP_APKS[@]}" "$APP_DIR/"
+
+          if [ -f "$GITHUB_WORKSPACE/apk-artifacts/${KEY_NAME}.ecdsa.pub" ]; then
+            cp "$GITHUB_WORKSPACE/apk-artifacts/${KEY_NAME}.ecdsa.pub" "$BUNDLE_DIR/"
+          elif [ -f "$GITHUB_WORKSPACE/package-src/keys/${KEY_NAME}.ecdsa.pub" ]; then
+            cp "$GITHUB_WORKSPACE/package-src/keys/${KEY_NAME}.ecdsa.pub" "$BUNDLE_DIR/"
+          fi
+
+          APK_RELEASE="${{ matrix.apk_release }}"
+          TARGET="${{ matrix.target }}"
+          SUBTARGET="${{ matrix.subtarget }}"
+          PKG_ARCH="${{ matrix.pkg_arch }}"
+          BASE_URL="https://downloads.openwrt.org/releases/${APK_RELEASE}"
+
+          REPOS=(
+            "${BASE_URL}/targets/${TARGET}/${SUBTARGET}/packages"
+            "${BASE_URL}/packages/${PKG_ARCH}/base"
+            "${BASE_URL}/packages/${PKG_ARCH}/luci"
+            "${BASE_URL}/packages/${PKG_ARCH}/packages"
+            "${BASE_URL}/packages/${PKG_ARCH}/routing"
+            "${BASE_URL}/packages/${PKG_ARCH}/telephony"
+            "${BASE_URL}/packages/${PKG_ARCH}/video"
+          )
+
+          KMODS_PARENT="${BASE_URL}/targets/${TARGET}/${SUBTARGET}/kmods"
+          KMODS_DIR="$(wget -qO- "${KMODS_PARENT}/" | grep -oE 'href="[^"/]+/"' | sed -E 's/href="([^"]+)\/"/\1/' | head -n1 || true)"
+          if [ -n "$KMODS_DIR" ]; then
+            REPOS+=("${KMODS_PARENT}/${KMODS_DIR}")
+          else
+            echo "::warning::Could not detect kmods directory for ${TARGET}/${SUBTARGET} in OpenWrt ${APK_RELEASE}"
+          fi
+
+          DEPENDS_RAW="$(sed -n 's/^[[:space:]]*DEPENDS:=//p' "$PKG_MAKEFILE" | tr '\\' ' ')"
+          mapfile -t DEPS < <(printf '%s\n' "$DEPENDS_RAW" \
+            | tr ' ' '\n' \
+            | sed 's/^+//' \
+            | sed '/^$/d;/^@/d' \
+            | sed 's/[<>=].*$//' \
+            | sort -u)
+
+          test "${#DEPS[@]}" -gt 0 || { echo "::error::No dependencies parsed from ${PKG_MAKEFILE}"; exit 1; }
+
+          find_dep_url() {
+            local pkg="$1"
+            local repo listing file_name
+            for repo in "${REPOS[@]}"; do
+              listing="$(wget -qO- "${repo}/" || true)"
+              file_name="$(printf '%s' "$listing" | grep -oE "${pkg}-[^\"'>[:space:]]*\\.apk" | sort -Vu | tail -n1 || true)"
+              if [ -n "$file_name" ]; then
+                printf '%s/%s\n' "$repo" "$file_name"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          MISSING=()
+          for dep in "${DEPS[@]}"; do
+            dep_url="$(find_dep_url "$dep" || true)"
+            if [ -z "$dep_url" ]; then
+              echo "::warning::Dependency APK not found in configured repos: $dep"
+              MISSING+=("$dep")
+              continue
+            fi
+            dep_file="$(basename "$dep_url")"
+            echo "Bundling dependency: $dep_file"
+            wget --tries=3 --timeout=120 -O "${DEPS_DIR}/${dep_file}" "$dep_url"
+            test -s "${DEPS_DIR}/${dep_file}" || { echo "::error::Downloaded dependency is empty: ${dep_file}"; exit 1; }
+          done
+
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            echo "::error::Failed to locate required dependency APK(s): ${MISSING[*]}"
+            exit 1
+          fi
+
+          app_apk_name="${{ steps.collect.outputs.primary_ipk }}"
+          app_apk_name="${app_apk_name%.ipk}.apk"
+          if [ ! -f "${APP_DIR}/${app_apk_name}" ]; then
+            app_apk_name="$(basename "${APP_APKS[0]}")"
+          fi
+          has_pubkey="no"
+          if [ -f "${BUNDLE_DIR}/${KEY_NAME}.ecdsa.pub" ]; then
+            has_pubkey="yes"
+          fi
+
+          cat > "${BUNDLE_DIR}/INSTALL-OFFLINE-BUNDLE.txt" <<EOF
+          Fully offline APK install bundle for ${app_apk_name}
+          ===============================================
+
+          This bundle contains:
+          - app/*.apk   (luci-app-ginet-cellmodem APKs from this build)
+          - deps/*.apk  (required runtime dependency APKs for OpenWrt ${APK_RELEASE})
+          - ${KEY_NAME}.ecdsa.pub (when available)
+
+          Install order (offline):
+            1) Trust key once on router (signed builds):
+               cp ${KEY_NAME}.ecdsa.pub /etc/apk/keys/
+            2) Install dependencies first:
+               apk add --no-network /mnt/deps/*.apk
+            3) Install the app package:
+               apk add --no-network /mnt/app/${app_apk_name}
+
+          Single command alternative (installs deps + app together):
+            apk add --no-network /mnt/deps/*.apk /mnt/app/${app_apk_name}
+
+          If your build is unsigned:
+            apk add --no-network --allow-untrusted /mnt/deps/*.apk /mnt/app/${app_apk_name}
+          EOF
+
+          if [ "$has_pubkey" = "no" ]; then
+            echo "::warning::Public signing key was not bundled (file not found)."
+          fi
+
+          (
+            cd "$BUNDLE_DIR"
+            sha256sum app/*.apk deps/*.apk > SHA256SUMS
+            if [ -f "${KEY_NAME}.ecdsa.pub" ]; then
+              sha256sum "${KEY_NAME}.ecdsa.pub" >> SHA256SUMS
+            fi
+            sha256sum INSTALL-OFFLINE-BUNDLE.txt >> SHA256SUMS
+          )
+
       - name: Upload .apk artifact
         uses: actions/upload-artifact@v5
         with:
@@ -315,4 +455,16 @@ jobs:
             apk-artifacts/*.ecdsa.pub
             apk-artifacts/SHA256SUMS
             artifacts/INSTALL.txt
+          if-no-files-found: error
+
+      - name: Upload offline APK bundle artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: apk-offline-bundle-${{ matrix.target_name }}
+          path: |
+            apk-offline-bundle/app/*.apk
+            apk-offline-bundle/deps/*.apk
+            apk-offline-bundle/*.ecdsa.pub
+            apk-offline-bundle/INSTALL-OFFLINE-BUNDLE.txt
+            apk-offline-bundle/SHA256SUMS
           if-no-files-found: error
