@@ -1,0 +1,11 @@
+{
+	"luci-app-ginet-cellmodem": {
+		"description": "Grant access to the GiNet cellular modem application",
+		"read": {
+			"uci": [ "ginet_modem" ]
+		},
+		"write": {
+			"uci": [ "ginet_modem" ]
+		}
+	}
+}

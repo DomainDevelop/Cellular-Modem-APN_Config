@@ -1,0 +1,35 @@
+{
+	"admin/network/ginet_modem": {
+		"title": "Cell Modem",
+		"order": 70,
+		"action": {
+			"type": "cbi",
+			"path": "ginet_modem"
+		},
+		"depends": {
+			"acl": [ "luci-app-ginet-cellmodem" ]
+		}
+	},
+	"admin/network/ginet_vpn": {
+		"title": "Cellular VPN",
+		"order": 71,
+		"action": {
+			"type": "cbi",
+			"path": "ginet_vpn"
+		},
+		"depends": {
+			"acl": [ "luci-app-ginet-cellmodem" ]
+		}
+	},
+	"admin/system/ginet_terminal": {
+		"title": "System Terminal",
+		"order": 95,
+		"action": {
+			"type": "cbi",
+			"path": "ginet_terminal"
+		},
+		"depends": {
+			"acl": [ "luci-app-ginet-cellmodem" ]
+		}
+	}
+}

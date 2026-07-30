@@ -14,7 +14,7 @@ define Package/luci-app-ginet-cellmodem
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=GiNet Cellular Modem & VPN Control
-  DEPENDS:=+luci-base +libuci-lua +libubox +uqmi +kmod-usb-net-qmi-wwan +wireguard-tools +kmod-wireguard +kmod-crypto-lib-chacha20poly1305 +kmod-crypto-lib-curve25519
+  DEPENDS:=+luci-base +luci-compat +libuci-lua +libubox +uqmi +kmod-usb-net-qmi-wwan +wireguard-tools +kmod-wireguard +kmod-crypto-lib-chacha20poly1305 +kmod-crypto-lib-curve25519
   PKGARCH:=all
 endef
 
@@ -45,8 +45,11 @@ define Package/luci-app-ginet-cellmodem/install
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/ginet_vpn.lua $(1)/usr/lib/lua/luci/model/cbi/ginet_vpn.lua
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/ginet_terminal.lua $(1)/usr/lib/lua/luci/model/cbi/ginet_terminal.lua
 
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/ginet_modem.lua $(1)/usr/lib/lua/luci/controller/ginet_modem.lua
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
+	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/luci-app-ginet-cellmodem.json $(1)/usr/share/luci/menu.d/luci-app-ginet-cellmodem.json
+
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/luci-app-ginet-cellmodem.json $(1)/usr/share/rpcd/acl.d/luci-app-ginet-cellmodem.json
 endef
 
 define Package/luci-app-ginet-cellmodem/postinst

@@ -198,6 +198,7 @@ jobs:
         run: |
           make package/${PACKAGE_NAME}/compile V=s -j$(($(nproc) + 1))
           
+          rm -rf output_ipk output_apk
           mkdir -p output_ipk
           translation_pkg=${PACKAGE_NAME#luci-app-}
           find ./bin/packages -type f \( -name "${PACKAGE_NAME}*.ipk" -o -name "luci-i18n-${translation_pkg}-*.ipk" \) -exec cp {} output_ipk/ \;
@@ -217,7 +218,8 @@ jobs:
           set -euo pipefail
           CONVERTER="${{ github.workspace }}/converter-src/openwrt-ipk2apk.py"
           test -f "$CONVERTER" || { echo "::error::Converter script not found at $CONVERTER"; exit 1; }
-          mkdir -p output_apk
+          rm -rf output_apk
+          mkdir output_apk
           shopt -s nullglob
           IPK_FILES=(output_ipk/*.ipk)
           if [ "${#IPK_FILES[@]}" -eq 0 ]; then
@@ -288,6 +290,24 @@ jobs:
             fi
           done
           echo "All APKs signed."
+
+      - name: Validate LuCI package contents
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          set -euo pipefail
+          APK_FILE="$(find output_apk -maxdepth 1 -type f -name "${PACKAGE_NAME}_*.apk" | head -n1)"
+          test -n "$APK_FILE" || { echo "::error::Primary APK not found"; exit 1; }
+
+          CONTENTS="$(gzip -cd "$APK_FILE" | tar --ignore-zeros -tf - | sed 's#^\./##')"
+          echo "Package contents: $APK_FILE"
+          printf '%s\n' "$CONTENTS"
+
+          printf '%s\n' "$CONTENTS" | grep -Eq '^usr/share/luci/menu\.d/[^/]+\.json$|^usr/lib/lua/luci/controller/[^/]+\.lua$' \
+            || { echo "::error::APK has no LuCI menu registration"; exit 1; }
+          printf '%s\n' "$CONTENTS" | grep -Eq '^usr/lib/lua/luci/view/|^usr/lib/lua/luci/model/cbi/[^/]+\.lua$|^www/luci-static/resources/view/' \
+            || { echo "::error::APK has no LuCI rendered page target"; exit 1; }
+          printf '%s\n' "$CONTENTS" | grep -qx 'usr/share/rpcd/acl.d/luci-app-ginet-cellmodem.json' \
+            || { echo "::error::APK is missing its rpcd ACL"; exit 1; }
 
       # 步骤 9: 收集和准备文件
       - name: Collect artifacts

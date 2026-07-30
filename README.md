@@ -125,6 +125,23 @@ ssh root@<ROUTER_IP> "apk add --no-network /tmp/luci-app-ginet-cellmodem_*.apk"
 After the public key is trusted once, future updates only require copying and
 installing the new `.apk` — no need to copy the key again.
 
+After installation, the application appears at:
+
+- **Network → Cell Modem**
+- **Network → Cellular VPN**
+- **System → System Terminal**
+
+Verify the installed LuCI payload and refresh LuCI caches if the entries do not
+appear immediately:
+
+```sh
+apk info -L luci-app-ginet-cellmodem | grep -E 'menu.d|luci/model/cbi|acl.d'
+rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-modulecache/*
+/etc/init.d/rpcd restart
+/etc/init.d/uhttpd restart
+```
+
 **If `APK_SIGNING_KEY` is not yet configured (unsigned build)**, install with:
 ```sh
 apk add --no-network --allow-untrusted /tmp/luci-app-ginet-cellmodem_*.apk
@@ -173,5 +190,5 @@ make package/luci-app-ginet-cellmodem/compile V=s
 
 ## Package Dependencies
 
-- Base LuCI/app runtime: `luci-base`, `libuci-lua`, `libubox`, `uqmi`, `kmod-usb-net-qmi-wwan`
+- Base LuCI/app runtime: `luci-base`, `luci-compat`, `libuci-lua`, `libubox`, `uqmi`, `kmod-usb-net-qmi-wwan`
 - VPN/WireGuard: `wireguard-tools`, `kmod-wireguard`, `kmod-crypto-lib-chacha20poly1305`, `kmod-crypto-lib-curve25519`

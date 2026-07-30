@@ -306,6 +306,23 @@ jobs:
           echo "Public key written: $PUBKEY_OUT"
           echo "Install on router: scp ${KEY_NAME}.ecdsa.pub root@ROUTER:/etc/apk/keys/"
 
+      - name: Validate LuCI package contents
+        run: |
+          set -euo pipefail
+          APK_FILE="$(find apk-artifacts -maxdepth 1 -type f -name '${{ steps.pkg.outputs.pkg_name }}_*.apk' | head -n1)"
+          test -n "$APK_FILE" || { echo "::error::Primary APK not found"; exit 1; }
+
+          CONTENTS="$(gzip -cd "$APK_FILE" | tar --ignore-zeros -tf - | sed 's#^\./##')"
+          echo "Package contents: $APK_FILE"
+          printf '%s\n' "$CONTENTS"
+
+          printf '%s\n' "$CONTENTS" | grep -Eq '^usr/share/luci/menu\.d/[^/]+\.json$|^usr/lib/lua/luci/controller/[^/]+\.lua$' \
+            || { echo "::error::APK has no LuCI menu registration"; exit 1; }
+          printf '%s\n' "$CONTENTS" | grep -Eq '^usr/lib/lua/luci/view/|^usr/lib/lua/luci/model/cbi/[^/]+\.lua$|^www/luci-static/resources/view/' \
+            || { echo "::error::APK has no LuCI rendered page target"; exit 1; }
+          printf '%s\n' "$CONTENTS" | grep -qx 'usr/share/rpcd/acl.d/luci-app-ginet-cellmodem.json' \
+            || { echo "::error::APK is missing its rpcd ACL"; exit 1; }
+
       - name: Upload .apk artifact
         uses: actions/upload-artifact@v5
         with:
