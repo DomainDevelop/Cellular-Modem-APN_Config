@@ -222,16 +222,6 @@ jobs:
           printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.* in package"; exit 1; }
           echo "Package format OK: $IPK_FILE"
 
-      - name: Upload .ipk artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: openwrt-ipk-${{ steps.collect.outputs.primary_ipk }}
-          path: |
-            artifacts/*.ipk
-            artifacts/SHA256SUMS
-            artifacts/INSTALL.txt
-          if-no-files-found: error
-
       - name: Checkout IPK to APK converter
         uses: actions/checkout@v5
         with:
@@ -515,25 +505,82 @@ jobs:
             sha256sum INSTALL-OFFLINE-BUNDLE.txt >> SHA256SUMS
           )
 
-      - name: Upload .apk artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: apk-packages-${{ matrix.target_name }}
-          path: |
-            apk-artifacts/*.apk
-            apk-artifacts/*.ecdsa.pub
-            apk-artifacts/SHA256SUMS
-            artifacts/INSTALL.txt
-          if-no-files-found: error
+      - name: Stage and verify artifact dist layout
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/apks dist/ipks dist/meta
 
-      - name: Upload offline APK bundle artifact
+          shopt -s nullglob
+
+          # Collect all produced APKs from conversion and offline-bundle dependency download outputs.
+          for f in apk-artifacts/*.apk apk-offline-bundle/app/*.apk apk-offline-bundle/deps/*.apk; do
+            cp -f "$f" dist/apks/
+          done
+
+          # Collect all produced IPKs from build artifact staging.
+          for f in artifacts/*.ipk; do
+            cp -f "$f" dist/ipks/
+          done
+
+          # Collect metadata, checksums, install guides, and key files.
+          for f in artifacts/*.txt artifacts/*.pub artifacts/*SUM* artifacts/*manifest*; do
+            cp -f "$f" "dist/meta/artifacts-$(basename "$f")"
+          done
+          for f in apk-artifacts/*.txt apk-artifacts/*.pub apk-artifacts/*SUM* apk-artifacts/*manifest*; do
+            cp -f "$f" "dist/meta/apk-artifacts-$(basename "$f")"
+          done
+          for f in apk-offline-bundle/*.txt apk-offline-bundle/*.pub apk-offline-bundle/*SUM* apk-offline-bundle/*manifest*; do
+            cp -f "$f" "dist/meta/apk-offline-bundle-$(basename "$f")"
+          done
+
+          {
+            echo "Artifact staging manifest"
+            echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "[apks]"
+            find dist/apks -maxdepth 1 -type f -printf '%f\n' | sort
+            echo
+            echo "[ipks]"
+            find dist/ipks -maxdepth 1 -type f -printf '%f\n' | sort
+            echo
+            echo "[meta]"
+            find dist/meta -maxdepth 1 -type f -printf '%f\n' | sort
+          } > dist/meta/staging-manifest.txt
+
+          APK_COUNT="$(find dist/apks -maxdepth 1 -type f -name '*.apk' | wc -l | tr -d ' ')"
+          IPK_COUNT="$(find dist/ipks -maxdepth 1 -type f -name '*.ipk' | wc -l | tr -d ' ')"
+          META_COUNT="$(find dist/meta -maxdepth 1 -type f | wc -l | tr -d ' ')"
+
+          [ "$APK_COUNT" -gt 0 ] || { echo "::error::Expected APK files are missing from dist/apks"; exit 1; }
+          [ "$IPK_COUNT" -gt 0 ] || { echo "::error::Expected IPK files are missing from dist/ipks"; exit 1; }
+          [ "$META_COUNT" -gt 0 ] || { echo "::error::Expected metadata files are missing from dist/meta"; exit 1; }
+
+          if ls dist/apks/libuci-lua-*.apk >/dev/null 2>&1; then
+            echo "Found required dependency in APKs: libuci-lua"
+          elif ls dist/ipks/libuci-lua_*.ipk >/dev/null 2>&1; then
+            echo "Found required dependency in IPKs: libuci-lua"
+          else
+            echo "::error::Required dependency not staged: libuci-lua"
+            exit 1
+          fi
+
+          if ls dist/apks/libubox-*.apk >/dev/null 2>&1 || ls dist/apks/libubox20230523-*.apk >/dev/null 2>&1; then
+            echo "Found required dependency in APKs: libubox"
+          elif ls dist/ipks/libubox_*.ipk >/dev/null 2>&1 || ls dist/ipks/libubox20230523_*.ipk >/dev/null 2>&1; then
+            echo "Found required dependency in IPKs: libubox"
+          else
+            echo "::error::Required dependency not staged: libubox"
+            exit 1
+          fi
+
+          echo "Recursive dist tree:"
+          find dist -print | sort
+          echo "dist counts: apk=${APK_COUNT} ipk=${IPK_COUNT} meta=${META_COUNT}"
+
+      - name: Upload staged artifact
         uses: actions/upload-artifact@v5
         with:
-          name: apk-offline-bundle-${{ matrix.target_name }}
-          path: |
-            apk-offline-bundle/app/*.apk
-            apk-offline-bundle/deps/*.apk
-            apk-offline-bundle/*.ecdsa.pub
-            apk-offline-bundle/INSTALL-OFFLINE-BUNDLE.txt
-            apk-offline-bundle/SHA256SUMS
+          name: openwrt-packages-${{ matrix.target_name }}
+          path: dist/**
           if-no-files-found: error
