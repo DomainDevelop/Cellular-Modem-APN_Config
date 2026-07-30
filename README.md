@@ -42,6 +42,12 @@ compiles this repo with the official OpenWrt SDK and uploads an artifact contain
 - `INSTALL.txt` (explains when to use `.ipk` vs `.apk`, plus offline install commands)
 - converted `.apk` package(s) generated from the built `.ipk` files
 - APK `SHA256SUMS`
+- `apk-offline-bundle-*` artifact with:
+  - app APK(s)
+  - required dependency APKs for the target OpenWrt APK release/arch
+  - `INSTALL-OFFLINE-BUNDLE.txt`
+  - signing public key (`domaindevelop-cellmodem.ecdsa.pub`, when available)
+  - bundle `SHA256SUMS`
 
 The build defaults to the XE-3000 class target: **OpenWrt 23.05.5, `mediatek/filogic`
 (`aarch64_cortex-a53`)**. Because the package is `PKGARCH:=all`, the resulting `.ipk`
@@ -54,9 +60,12 @@ is portable across OpenWrt 23.05.x devices that provide the listed dependencies.
 2. Download the artifact named like:
    - `openwrt-ipk-luci-app-ginet-cellmodem_0.2.0-r1_all.ipk`
    - `apk-packages-xe3000`
+   - `apk-offline-bundle-xe3000`
 3. Extract it. You will get `luci-app-ginet-cellmodem_*.ipk`, `SHA256SUMS`, and
    `INSTALL.txt`.
-4. For APK output, open `apk-packages-*` to get `*.apk` plus its `SHA256SUMS`.
+4. For APK output:
+   - `apk-packages-*`: app `.apk` files (single-package installs)
+   - `apk-offline-bundle-*`: app + dependency `.apk` files for full offline installs
 5. Read `INSTALL.txt` before uploading anything; it tells you which package format matches
    your firmware and explains unsigned APK behavior.
 
@@ -81,7 +90,7 @@ opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 opkg update && opkg install /tmp/luci-app-ginet-cellmodem_*.ipk
 ```
 
-#### OpenWrt 25.12.x and newer (`apk`) — trusted install
+#### OpenWrt 25.12.x and newer (`apk`)
 
 The signing key pair for this repository has been generated.  The **public key**
 is committed at [`keys/domaindevelop-cellmodem.ecdsa.pub`](keys/domaindevelop-cellmodem.ecdsa.pub).
@@ -106,7 +115,7 @@ scp keys/domaindevelop-cellmodem.ecdsa.pub root@<ROUTER_IP>:/etc/apk/keys/
    umount /mnt
 ```
 
-**Install the signed APK:**
+**Path A — single-package APK install (dependencies already installed on router):**
 
 *Over Ethernet (SSH/SCP):*
 ```sh
@@ -125,9 +134,27 @@ ssh root@<ROUTER_IP> "apk add --no-network /tmp/luci-app-ginet-cellmodem_*.apk"
 After the public key is trusted once, future updates only require copying and
 installing the new `.apk` — no need to copy the key again.
 
-**If `APK_SIGNING_KEY` is not yet configured (unsigned build)**, install with:
+**Path B — full offline bundle install (when target firmware is missing required runtime packages):**
+1. Download and extract `apk-offline-bundle-*`.
+2. Copy the extracted folder to USB (or SCP to router).
+3. Install dependency bundle first, then install the app:
 ```sh
-apk add --no-network --allow-untrusted /tmp/luci-app-ginet-cellmodem_*.apk
+apk add --no-network /mnt/deps/*.apk
+apk add --no-network /mnt/app/luci-app-ginet-cellmodem_*.apk
+```
+The `luci-app-ginet-cellmodem` APK remains separate; dependency APKs are bundled in
+the same offline artifact under `deps/` (not embedded inside the app APK).
+
+You can also run a single order-safe chain:
+```sh
+apk add --no-network /mnt/deps/*.apk && \
+apk add --no-network /mnt/app/luci-app-ginet-cellmodem_*.apk
+```
+
+**If `APK_SIGNING_KEY` is not yet configured (unsigned build)**, add `--allow-untrusted`:
+```sh
+apk add --no-network --allow-untrusted /mnt/deps/*.apk && \
+apk add --no-network --allow-untrusted /mnt/app/luci-app-ginet-cellmodem_*.apk
 ```
 
 #### Setting up APK package signing (one-time secret setup)
@@ -173,5 +200,5 @@ make package/luci-app-ginet-cellmodem/compile V=s
 
 ## Package Dependencies
 
-- Base LuCI/app runtime: `luci-base`, `libuci-lua`, `libubox`, `uqmi`, `kmod-usb-net-qmi-wwan`
+- Base LuCI/app runtime: `luci-base`, `uqmi`, `kmod-usb-net-qmi-wwan`
 - VPN/WireGuard: `wireguard-tools`, `kmod-wireguard`, `kmod-crypto-lib-chacha20poly1305`, `kmod-crypto-lib-curve25519`

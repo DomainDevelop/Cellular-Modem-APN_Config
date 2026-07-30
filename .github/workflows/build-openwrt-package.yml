@@ -32,6 +32,7 @@ jobs:
           # Default, XE-3000 class target (OpenWrt 23.05.5 mediatek/filogic).
           - target_name: xe3000
             openwrt_version: "23.05.5"
+            apk_release: "25.12.5"
             target: "mediatek"
             subtarget: "filogic"
             pkg_arch: "aarch64_cortex-a53"
@@ -161,7 +162,11 @@ jobs:
 
           ── OpenWrt 25.12.x and newer (apk) ───────────────────────────────────
 
-          Use the .apk file from the apk-packages-* artifact.
+          Use the .apk file from the apk-packages-* artifact when dependencies
+          are already installed on the router.
+
+          For fully-offline install on a router without package indexes/cache,
+          use the apk-offline-bundle-* artifact (contains app APK + dependencies).
 
           The public signing key is available at:
             keys/domaindevelop-cellmodem.ecdsa.pub  (in the repository)
@@ -216,16 +221,6 @@ jobs:
           printf '%s\n' "$AR_ENTRIES" | grep -Eq "^control\.tar" || { echo "::error::Missing control.tar.* in package"; exit 1; }
           printf '%s\n' "$AR_ENTRIES" | grep -Eq "^data\.tar" || { echo "::error::Missing data.tar.* in package"; exit 1; }
           echo "Package format OK: $IPK_FILE"
-
-      - name: Upload .ipk artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: openwrt-ipk-${{ steps.collect.outputs.primary_ipk }}
-          path: |
-            artifacts/*.ipk
-            artifacts/SHA256SUMS
-            artifacts/INSTALL.txt
-          if-no-files-found: error
 
       - name: Checkout IPK to APK converter
         uses: actions/checkout@v5
@@ -306,13 +301,286 @@ jobs:
           echo "Public key written: $PUBKEY_OUT"
           echo "Install on router: scp ${KEY_NAME}.ecdsa.pub root@ROUTER:/etc/apk/keys/"
 
-      - name: Upload .apk artifact
+      - name: Assemble offline APK dependency bundle
+        run: |
+          set -euo pipefail
+          KEY_NAME="domaindevelop-cellmodem"
+          PKG_MAKEFILE="$GITHUB_WORKSPACE/${{ steps.pkg.outputs.pkg_dir }}/Makefile"
+          BUNDLE_DIR="$GITHUB_WORKSPACE/apk-offline-bundle"
+          APP_DIR="$BUNDLE_DIR/app"
+          DEPS_DIR="$BUNDLE_DIR/deps"
+          mkdir -p "$APP_DIR" "$DEPS_DIR"
+
+          shopt -s nullglob
+          APP_APKS=("$GITHUB_WORKSPACE/apk-artifacts/"*.apk)
+          test "${#APP_APKS[@]}" -gt 0 || { echo "::error::No app APK files found to bundle"; exit 1; }
+          cp "${APP_APKS[@]}" "$APP_DIR/"
+
+          if [ -f "$GITHUB_WORKSPACE/apk-artifacts/${KEY_NAME}.ecdsa.pub" ]; then
+            cp "$GITHUB_WORKSPACE/apk-artifacts/${KEY_NAME}.ecdsa.pub" "$BUNDLE_DIR/"
+          elif [ -f "$GITHUB_WORKSPACE/package-src/keys/${KEY_NAME}.ecdsa.pub" ]; then
+            cp "$GITHUB_WORKSPACE/package-src/keys/${KEY_NAME}.ecdsa.pub" "$BUNDLE_DIR/"
+          fi
+
+          APK_RELEASE="${{ matrix.apk_release }}"
+          TARGET="${{ matrix.target }}"
+          SUBTARGET="${{ matrix.subtarget }}"
+          PKG_ARCH="${{ matrix.pkg_arch }}"
+          BASE_URL="https://downloads.openwrt.org/releases/${APK_RELEASE}"
+
+          REPOS=(
+            "${BASE_URL}/targets/${TARGET}/${SUBTARGET}/packages"
+            "${BASE_URL}/packages/${PKG_ARCH}/base"
+            "${BASE_URL}/packages/${PKG_ARCH}/luci"
+            "${BASE_URL}/packages/${PKG_ARCH}/packages"
+            "${BASE_URL}/packages/${PKG_ARCH}/routing"
+            "${BASE_URL}/packages/${PKG_ARCH}/telephony"
+            "${BASE_URL}/packages/${PKG_ARCH}/video"
+          )
+
+          KMODS_PARENT="${BASE_URL}/targets/${TARGET}/${SUBTARGET}/kmods"
+          KMODS_DIR="$(wget -qO- "${KMODS_PARENT}/" | grep -oE 'href="[^"/]+/"' | sed -E 's/href="([^"]+)\/"/\1/' | head -n1 || true)"
+          if [ -n "$KMODS_DIR" ]; then
+            REPOS+=("${KMODS_PARENT}/${KMODS_DIR}")
+          else
+            echo "::warning::Could not detect kmods directory for ${TARGET}/${SUBTARGET} in OpenWrt ${APK_RELEASE}"
+          fi
+
+          DEPENDS_RAW="$(sed -n 's/^[[:space:]]*DEPENDS:=//p' "$PKG_MAKEFILE" | tr '\\' ' ')"
+          mapfile -t DEPS < <(printf '%s\n' "$DEPENDS_RAW" \
+            | tr ' ' '\n' \
+            | sed 's/^+//' \
+            | sed '/^$/d;/^@/d' \
+            | sed 's/[<>=].*$//' \
+            | sort -u)
+
+          test "${#DEPS[@]}" -gt 0 || { echo "::error::No dependencies parsed from ${PKG_MAKEFILE}"; exit 1; }
+
+          find_dep_url() {
+            local pkg="$1"
+            local repo listing file_name
+            for repo in "${REPOS[@]}"; do
+              listing="$(wget -qO- "${repo}/" || true)"
+              file_name="$(printf '%s' "$listing" | grep -oE "${pkg}-[^\"'>[:space:]]*\\.apk" | sort -Vu | tail -n1 || true)"
+              if [ -n "$file_name" ]; then
+                printf '%s/%s\n' "$repo" "$file_name"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          # Explicit core dependency bundle requirement requested for offline install.
+          REQUIRED_CORE_PKG_NAMES=(libuci-lua libubox20230523)
+          for core_pkg in "${REQUIRED_CORE_PKG_NAMES[@]}"; do
+            core_url="$(find_dep_url "$core_pkg" || true)"
+            if [ -z "$core_url" ]; then
+              echo "::error::Required core dependency could not be located in OpenWrt ${APK_RELEASE} repos: ${core_pkg}"
+              exit 1
+            fi
+            core_file="$(basename "$core_url")"
+            echo "Bundling required core dependency: ${core_file}"
+            wget --tries=3 --timeout=120 -O "${DEPS_DIR}/${core_file}" "$core_url"
+            test -s "${DEPS_DIR}/${core_file}" || { echo "::error::Downloaded dependency is empty: ${core_file}"; exit 1; }
+          done
+
+          # Keep Makefile dependency names, but normalize known APK package rename.
+          normalize_dep_pkg_name() {
+            local dep_name="$1"
+            case "$dep_name" in
+              libubox) printf '%s\n' "libubox20230523" ;;
+              *) printf '%s\n' "$dep_name" ;;
+            esac
+          }
+
+          MISSING=()
+          for dep in "${DEPS[@]}"; do
+            dep_pkg="$(normalize_dep_pkg_name "$dep")"
+            dep_url="$(find_dep_url "$dep_pkg" || true)"
+            if [ -z "$dep_url" ]; then
+              echo "::warning::Dependency APK not found in configured repos: $dep_pkg (from $dep)"
+              MISSING+=("$dep_pkg")
+              continue
+            fi
+            dep_file="$(basename "$dep_url")"
+            if [ -f "${DEPS_DIR}/${dep_file}" ]; then
+              echo "Dependency already bundled: $dep_file"
+              continue
+            fi
+            echo "Bundling dependency: $dep_file"
+            wget --tries=3 --timeout=120 -O "${DEPS_DIR}/${dep_file}" "$dep_url"
+            test -s "${DEPS_DIR}/${dep_file}" || { echo "::error::Downloaded dependency is empty: ${dep_file}"; exit 1; }
+          done
+
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            echo "::error::Failed to locate required dependency APK(s): ${MISSING[*]}"
+            exit 1
+          fi
+
+          REQUIRED_FIRST_DEPS=(libubox20230523 libuci-lua)
+          for core_dep in "${REQUIRED_FIRST_DEPS[@]}"; do
+            if ! ls "${DEPS_DIR}/${core_dep}-"*.apk >/dev/null 2>&1; then
+              echo "::error::Required core dependency APK missing from bundle: ${core_dep}"
+              exit 1
+            fi
+          done
+
+          mapfile -t BUNDLED_DEP_APKS < <(find "$DEPS_DIR" -maxdepth 1 -type f -name '*.apk' | sort)
+          CORE_APKS=()
+          OTHER_APKS=()
+          for dep_apk in "${BUNDLED_DEP_APKS[@]}"; do
+            dep_base="$(basename "$dep_apk")"
+            if [[ "$dep_base" == libubox20230523-* ]] || [[ "$dep_base" == libuci-lua-* ]]; then
+              CORE_APKS+=("$dep_apk")
+            else
+              OTHER_APKS+=("$dep_apk")
+            fi
+          done
+
+          core_install_cmd="apk add --no-network"
+          for dep_apk in "${CORE_APKS[@]}"; do
+            core_install_cmd+=" /mnt/deps/$(basename "$dep_apk")"
+          done
+          rest_install_cmd="apk add --no-network"
+          for dep_apk in "${OTHER_APKS[@]}"; do
+            rest_install_cmd+=" /mnt/deps/$(basename "$dep_apk")"
+          done
+          rest_install_line="$rest_install_cmd"
+          if [ "${#OTHER_APKS[@]}" -eq 0 ]; then
+            rest_install_line="echo 'No additional dependency APKs beyond libubox20230523/libuci-lua.'"
+          fi
+          unsigned_install_cmd="apk add --no-network --allow-untrusted"
+          for dep_apk in "${BUNDLED_DEP_APKS[@]}"; do
+            unsigned_install_cmd+=" /mnt/deps/$(basename "$dep_apk")"
+          done
+
+          app_apk_name="${{ steps.collect.outputs.primary_ipk }}"
+          app_apk_name="${app_apk_name%.ipk}.apk"
+          if [ ! -f "${APP_DIR}/${app_apk_name}" ]; then
+            app_apk_name="$(basename "${APP_APKS[0]}")"
+          fi
+          unsigned_install_cmd+=" /mnt/app/${app_apk_name}"
+          has_pubkey="no"
+          if [ -f "${BUNDLE_DIR}/${KEY_NAME}.ecdsa.pub" ]; then
+            has_pubkey="yes"
+          fi
+
+          cat > "${BUNDLE_DIR}/INSTALL-OFFLINE-BUNDLE.txt" <<EOF
+          Fully offline APK install bundle for ${app_apk_name}
+          ===============================================
+
+          This bundle contains:
+          - app/*.apk   (luci-app-ginet-cellmodem APKs from this build; no dependency APKs inside)
+          - deps/*.apk  (required runtime dependency APKs for OpenWrt ${APK_RELEASE})
+          - ${KEY_NAME}.ecdsa.pub (when available)
+          - explicit required core deps: libubox20230523 + libuci-lua from OpenWrt ${APK_RELEASE} ${PKG_ARCH}
+
+          Install order (offline):
+            1) Trust key once on router (signed builds):
+               cp ${KEY_NAME}.ecdsa.pub /etc/apk/keys/
+            2) Install core dependencies FIRST (required before app install):
+               ${core_install_cmd}
+            3) Install remaining dependency APKs:
+               ${rest_install_line}
+            4) Install the app package:
+               apk add --no-network /mnt/app/${app_apk_name}
+
+          Install everything in one command (order-safe because core deps are explicit first):
+            ${core_install_cmd} && ${rest_install_line} && apk add --no-network /mnt/app/${app_apk_name}
+
+          If your build is unsigned:
+            ${unsigned_install_cmd}
+          EOF
+
+          if [ "$has_pubkey" = "no" ]; then
+            echo "::warning::Public signing key was not bundled (file not found)."
+          fi
+
+          (
+            cd "$BUNDLE_DIR"
+            sha256sum app/*.apk deps/*.apk > SHA256SUMS
+            if [ -f "${KEY_NAME}.ecdsa.pub" ]; then
+              sha256sum "${KEY_NAME}.ecdsa.pub" >> SHA256SUMS
+            fi
+            sha256sum INSTALL-OFFLINE-BUNDLE.txt >> SHA256SUMS
+          )
+
+      - name: Stage and verify artifact dist layout
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/apks dist/ipks dist/meta
+
+          shopt -s nullglob
+
+          # Collect all produced APKs from conversion and offline-bundle dependency download outputs.
+          for f in apk-artifacts/*.apk apk-offline-bundle/app/*.apk apk-offline-bundle/deps/*.apk; do
+            cp -f "$f" dist/apks/
+          done
+
+          # Collect all produced IPKs from build artifact staging.
+          for f in artifacts/*.ipk; do
+            cp -f "$f" dist/ipks/
+          done
+
+          # Collect metadata, checksums, install guides, and key files.
+          for f in artifacts/*.txt artifacts/*.pub artifacts/*SUM* artifacts/*manifest*; do
+            cp -f "$f" "dist/meta/artifacts-$(basename "$f")"
+          done
+          for f in apk-artifacts/*.txt apk-artifacts/*.pub apk-artifacts/*SUM* apk-artifacts/*manifest*; do
+            cp -f "$f" "dist/meta/apk-artifacts-$(basename "$f")"
+          done
+          for f in apk-offline-bundle/*.txt apk-offline-bundle/*.pub apk-offline-bundle/*SUM* apk-offline-bundle/*manifest*; do
+            cp -f "$f" "dist/meta/apk-offline-bundle-$(basename "$f")"
+          done
+
+          {
+            echo "Artifact staging manifest"
+            echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "[apks]"
+            find dist/apks -maxdepth 1 -type f -printf '%f\n' | sort
+            echo
+            echo "[ipks]"
+            find dist/ipks -maxdepth 1 -type f -printf '%f\n' | sort
+            echo
+            echo "[meta]"
+            find dist/meta -maxdepth 1 -type f -printf '%f\n' | sort
+          } > dist/meta/staging-manifest.txt
+
+          APK_COUNT="$(find dist/apks -maxdepth 1 -type f -name '*.apk' | wc -l | tr -d ' ')"
+          IPK_COUNT="$(find dist/ipks -maxdepth 1 -type f -name '*.ipk' | wc -l | tr -d ' ')"
+          META_COUNT="$(find dist/meta -maxdepth 1 -type f | wc -l | tr -d ' ')"
+
+          [ "$APK_COUNT" -gt 0 ] || { echo "::error::Expected APK files are missing from dist/apks"; exit 1; }
+          [ "$IPK_COUNT" -gt 0 ] || { echo "::error::Expected IPK files are missing from dist/ipks"; exit 1; }
+          [ "$META_COUNT" -gt 0 ] || { echo "::error::Expected metadata files are missing from dist/meta"; exit 1; }
+
+          if ls dist/apks/libuci-lua-*.apk >/dev/null 2>&1; then
+            echo "Found required dependency in APKs: libuci-lua"
+          elif ls dist/ipks/libuci-lua_*.ipk >/dev/null 2>&1; then
+            echo "Found required dependency in IPKs: libuci-lua"
+          else
+            echo "::error::Required dependency not staged: libuci-lua"
+            exit 1
+          fi
+
+          if ls dist/apks/libubox-*.apk >/dev/null 2>&1 || ls dist/apks/libubox20230523-*.apk >/dev/null 2>&1; then
+            echo "Found required dependency in APKs: libubox"
+          elif ls dist/ipks/libubox_*.ipk >/dev/null 2>&1 || ls dist/ipks/libubox20230523_*.ipk >/dev/null 2>&1; then
+            echo "Found required dependency in IPKs: libubox"
+          else
+            echo "::error::Required dependency not staged: libubox"
+            exit 1
+          fi
+
+          echo "Recursive dist tree:"
+          find dist -print | sort
+          echo "dist counts: apk=${APK_COUNT} ipk=${IPK_COUNT} meta=${META_COUNT}"
+
+      - name: Upload staged artifact
         uses: actions/upload-artifact@v5
         with:
-          name: apk-packages-${{ matrix.target_name }}
-          path: |
-            apk-artifacts/*.apk
-            apk-artifacts/*.ecdsa.pub
-            apk-artifacts/SHA256SUMS
-            artifacts/INSTALL.txt
+          name: openwrt-packages-${{ matrix.target_name }}
+          path: dist/**
           if-no-files-found: error

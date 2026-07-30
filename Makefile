@@ -14,7 +14,7 @@ define Package/luci-app-ginet-cellmodem
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=GiNet Cellular Modem & VPN Control
-  DEPENDS:=+luci-base +libuci-lua +libubox +uqmi +kmod-usb-net-qmi-wwan +wireguard-tools +kmod-wireguard +kmod-crypto-lib-chacha20poly1305 +kmod-crypto-lib-curve25519
+  DEPENDS:=+luci-base +uqmi +kmod-usb-net-qmi-wwan +wireguard-tools +kmod-wireguard +kmod-crypto-lib-chacha20poly1305 +kmod-crypto-lib-curve25519
   PKGARCH:=all
 endef
 
