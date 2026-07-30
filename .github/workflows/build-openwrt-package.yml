@@ -380,15 +380,43 @@ jobs:
             return 1
           }
 
+          # Explicit core dependency bundle requirement requested for offline install.
+          REQUIRED_CORE_PKG_NAMES=(libuci-lua libubox20230523)
+          for core_pkg in "${REQUIRED_CORE_PKG_NAMES[@]}"; do
+            core_url="$(find_dep_url "$core_pkg" || true)"
+            if [ -z "$core_url" ]; then
+              echo "::error::Required core dependency could not be located in OpenWrt ${APK_RELEASE} repos: ${core_pkg}"
+              exit 1
+            fi
+            core_file="$(basename "$core_url")"
+            echo "Bundling required core dependency: ${core_file}"
+            wget --tries=3 --timeout=120 -O "${DEPS_DIR}/${core_file}" "$core_url"
+            test -s "${DEPS_DIR}/${core_file}" || { echo "::error::Downloaded dependency is empty: ${core_file}"; exit 1; }
+          done
+
+          # Keep Makefile dependency names, but normalize known APK package rename.
+          normalize_dep_pkg_name() {
+            local dep_name="$1"
+            case "$dep_name" in
+              libubox) printf '%s\n' "libubox20230523" ;;
+              *) printf '%s\n' "$dep_name" ;;
+            esac
+          }
+
           MISSING=()
           for dep in "${DEPS[@]}"; do
-            dep_url="$(find_dep_url "$dep" || true)"
+            dep_pkg="$(normalize_dep_pkg_name "$dep")"
+            dep_url="$(find_dep_url "$dep_pkg" || true)"
             if [ -z "$dep_url" ]; then
-              echo "::warning::Dependency APK not found in configured repos: $dep"
-              MISSING+=("$dep")
+              echo "::warning::Dependency APK not found in configured repos: $dep_pkg (from $dep)"
+              MISSING+=("$dep_pkg")
               continue
             fi
             dep_file="$(basename "$dep_url")"
+            if [ -f "${DEPS_DIR}/${dep_file}" ]; then
+              echo "Dependency already bundled: $dep_file"
+              continue
+            fi
             echo "Bundling dependency: $dep_file"
             wget --tries=3 --timeout=120 -O "${DEPS_DIR}/${dep_file}" "$dep_url"
             test -s "${DEPS_DIR}/${dep_file}" || { echo "::error::Downloaded dependency is empty: ${dep_file}"; exit 1; }
@@ -399,7 +427,7 @@ jobs:
             exit 1
           fi
 
-          REQUIRED_FIRST_DEPS=(libubox libuci-lua)
+          REQUIRED_FIRST_DEPS=(libubox20230523 libuci-lua)
           for core_dep in "${REQUIRED_FIRST_DEPS[@]}"; do
             if ! ls "${DEPS_DIR}/${core_dep}-"*.apk >/dev/null 2>&1; then
               echo "::error::Required core dependency APK missing from bundle: ${core_dep}"
@@ -412,7 +440,7 @@ jobs:
           OTHER_APKS=()
           for dep_apk in "${BUNDLED_DEP_APKS[@]}"; do
             dep_base="$(basename "$dep_apk")"
-            if [[ "$dep_base" == libubox-* ]] || [[ "$dep_base" == libuci-lua-* ]]; then
+            if [[ "$dep_base" == libubox20230523-* ]] || [[ "$dep_base" == libuci-lua-* ]]; then
               CORE_APKS+=("$dep_apk")
             else
               OTHER_APKS+=("$dep_apk")
@@ -429,7 +457,7 @@ jobs:
           done
           rest_install_line="$rest_install_cmd"
           if [ "${#OTHER_APKS[@]}" -eq 0 ]; then
-            rest_install_line="echo 'No additional dependency APKs beyond libubox/libuci-lua.'"
+            rest_install_line="echo 'No additional dependency APKs beyond libubox20230523/libuci-lua.'"
           fi
           unsigned_install_cmd="apk add --no-network --allow-untrusted"
           for dep_apk in "${BUNDLED_DEP_APKS[@]}"; do
@@ -455,6 +483,7 @@ jobs:
           - app/*.apk   (luci-app-ginet-cellmodem APKs from this build; no dependency APKs inside)
           - deps/*.apk  (required runtime dependency APKs for OpenWrt ${APK_RELEASE})
           - ${KEY_NAME}.ecdsa.pub (when available)
+          - explicit required core deps: libubox20230523 + libuci-lua from OpenWrt ${APK_RELEASE} ${PKG_ARCH}
 
           Install order (offline):
             1) Trust key once on router (signed builds):
